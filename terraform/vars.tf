@@ -186,7 +186,7 @@ variable "station_capacity" {
 
 variable "agg_window_seconds" {
   type        = number
-  default     = 10
+  default     = 5
   description = "Tumbling window size for the Flink crowd metrics. Smaller = livelier demo (metrics/anomalies/AI update faster)."
 }
 
