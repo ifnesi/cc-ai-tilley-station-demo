@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "station_anomalies",
+  "namespace": "tilley",
+  "doc": "ML_DETECT_ANOMALIES output over foot_in and alight_total. Only is_anomaly rows are kept downstream.",
+  "fields": [
+    { "name": "window_start", "type": { "type": "long", "logicalType": "timestamp-millis" } },
+    { "name": "metric", "type": "string", "doc": "e.g. 'foot_in', 'alight_total'." },
+    { "name": "actual", "type": "double" },
+    { "name": "forecast", "type": "double" },
+    { "name": "lower_bound", "type": "double" },
+    { "name": "upper_bound", "type": "double" },
+    { "name": "is_anomaly", "type": "boolean" }
+  ]
+}

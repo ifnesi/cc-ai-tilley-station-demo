@@ -1,0 +1,8 @@
+# Tilley Station emulator
+confluent-kafka[schemaregistry,avro]>=2.5.0,<3
+fastavro>=1.9.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# dev / stop-gate tests
+pytest>=8.0.0

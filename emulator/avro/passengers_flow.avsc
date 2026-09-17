@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "name": "passengers_flow",
+  "namespace": "tilley",
+  "doc": "Foot flow: passengers entering Tilley from the street. Joins occupancy.",
+  "fields": [
+    { "name": "station_name", "type": "string" },
+    { "name": "passengers", "type": "int", "doc": "Passengers entering from the street this tick (already throttled by the gateline)." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

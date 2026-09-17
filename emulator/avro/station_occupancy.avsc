@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "station_occupancy",
+  "namespace": "tilley",
+  "doc": "Authoritative occupancy heartbeat and single source of truth. occupancy is guaranteed >= 0 at the source (the emulator), never in SQL.",
+  "fields": [
+    { "name": "station_name", "type": "string" },
+    { "name": "occupancy", "type": "int", "doc": "Live passengers inside Tilley. Always >= 0." },
+    { "name": "capacity", "type": "int" },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

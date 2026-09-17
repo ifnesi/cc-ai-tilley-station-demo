@@ -1,0 +1,80 @@
+# Outputs feed the single root.env. Retrieve with:
+#   terraform output -raw <name>
+# or dump all as JSON:  terraform output -json > tf_outputs.json
+
+output "environment_id" {
+  description = "Confluent Cloud environment id (Flink catalog)"
+  value       = confluent_environment.env.id
+}
+
+output "kafka_cluster_id" {
+  description = "Kafka cluster id (Flink database)"
+  value       = confluent_kafka_cluster.kafka.id
+}
+
+output "bootstrap_servers" {
+  description = "BOOTSTRAP_SERVERS (strip the SASL_SSL:// prefix for clients)"
+  value       = confluent_kafka_cluster.kafka.bootstrap_endpoint
+}
+
+output "schema_registry_url" {
+  description = "SCHEMA_REGISTRY_URL"
+  value       = data.confluent_schema_registry_cluster.sr.rest_endpoint
+}
+
+output "flink_compute_pool_id" {
+  value = confluent_flink_compute_pool.pool.id
+}
+
+output "flink_region_rest_endpoint" {
+  value = data.confluent_flink_region.main.rest_endpoint
+}
+
+# --- client credentials (emulator + backend) -> KAFKA_API_KEY / SECRET ------
+output "kafka_api_key" {
+  description = "KAFKA_API_KEY"
+  value       = confluent_api_key.clients_kafka.id
+}
+
+output "kafka_api_secret" {
+  description = "KAFKA_API_SECRET"
+  value       = confluent_api_key.clients_kafka.secret
+  sensitive   = true
+}
+
+# --- schema registry credentials -> SCHEMA_REGISTRY_API_KEY / SECRET --------
+output "schema_registry_api_key" {
+  description = "SCHEMA_REGISTRY_API_KEY"
+  value       = confluent_api_key.sr.id
+}
+
+output "schema_registry_api_secret" {
+  description = "SCHEMA_REGISTRY_API_SECRET"
+  value       = confluent_api_key.sr.secret
+  sensitive   = true
+}
+
+# --- Flink management key (for the CLI / connection creation) ---------------
+output "flink_api_key" {
+  value = confluent_api_key.flink.id
+}
+
+output "flink_api_secret" {
+  value     = confluent_api_key.flink.secret
+  sensitive = true
+}
+
+# Convenience: the .env lines for the Kafka/SR block. Secrets are redacted
+# unless you read them explicitly with `terraform output -raw`.
+output "env_block" {
+  description = "Paste-ready .env lines (run `terraform output -raw env_block`)"
+  sensitive   = true
+  value       = <<-EOT
+    BOOTSTRAP_SERVERS=${replace(confluent_kafka_cluster.kafka.bootstrap_endpoint, "SASL_SSL://", "")}
+    KAFKA_API_KEY=${confluent_api_key.clients_kafka.id}
+    KAFKA_API_SECRET=${confluent_api_key.clients_kafka.secret}
+    SCHEMA_REGISTRY_URL=${data.confluent_schema_registry_cluster.sr.rest_endpoint}
+    SCHEMA_REGISTRY_API_KEY=${confluent_api_key.sr.id}
+    SCHEMA_REGISTRY_API_SECRET=${confluent_api_key.sr.secret}
+  EOT
+}

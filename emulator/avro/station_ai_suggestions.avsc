@@ -1,0 +1,13 @@
+{
+  "type": "record",
+  "name": "station_ai_suggestions",
+  "namespace": "tilley",
+  "doc": "GenAI advisor output (AI_COMPLETE on Bedrock), one per debounced episode. suggestion is the four-line block (SEVERITY/ASSESSMENT/ACTIONS/WATCH).",
+  "fields": [
+    { "name": "trigger", "type": "string", "doc": "'anomaly' | 'threshold'." },
+    { "name": "metric", "type": "string" },
+    { "name": "severity", "type": "string", "doc": "LOW | MEDIUM | HIGH (parsed from the suggestion)." },
+    { "name": "suggestion", "type": "string", "doc": "Four-line plain-text advice block." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

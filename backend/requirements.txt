@@ -1,0 +1,13 @@
+# Tilley Station Flask-SocketIO backend
+flask>=3.0,<4
+flask-socketio>=5.3
+simple-websocket>=1.0            # websocket transport for threading async mode
+python-dotenv>=1.0.0
+confluent-kafka[schemaregistry,avro]>=2.5.0,<3
+requests>=2.31.0
+
+# optional: only needed if SOCKETIO_ASYNC_MODE=eventlet
+eventlet>=0.35 ; python_version < "3.13"
+
+# dev / stop-gate tests
+pytest>=8.0.0

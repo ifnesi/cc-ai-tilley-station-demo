@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tilley Station: Live Crowd Management</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.9/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ---------------------------------------------------------------------------
+// config + helpers
+// ---------------------------------------------------------------------------
+const DEFAULT_CFG = {
+  station_name: "Tilley Station", capacity: 1200, evacuation_flow: 3.5,
+  agg_window_seconds: 15, pct_low: 0.70, pct_high: 0.85, pct_critical: 0.95,
+  evac_warn: 360, evac_crit: 480, neighbour_west: "Overton Station",
+  neighbour_east: "Jones Station", surge_duration: 45,
+};
+const DEMO = new URLSearchParams(location.search).has("demo");
+const clampArr = (a, n) => (a.length > n ? a.slice(a.length - n) : a);
+const hhmmss = (ms) => new Date(ms).toLocaleTimeString();
+const mmss = (s) => {
+  s = Math.max(0, Math.round(s));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+};
+
+function zoneColor(pct, cfg) {
+  if (pct >= cfg.pct_critical) return "var(--critical)";
+  if (pct >= cfg.pct_high) return "var(--red)";
+  if (pct >= cfg.pct_low) return "var(--amber)";
+  return "var(--green)";
+}
+function evacColor(evac, cfg) {
+  if (evac >= cfg.evac_crit) return "var(--red)";
+  if (evac >= cfg.evac_warn) return "var(--amber)";
+  return "var(--green)";
+}
+
+// ---------------------------------------------------------------------------
+// Safety panel
+// ---------------------------------------------------------------------------
+function Safety({ occupancy, capacity, cfg }) {
+  const evac = occupancy / cfg.evacuation_flow;
+  const pct = capacity ? occupancy / capacity : 0;
+  return (
+    <div className="panel area-safety">
+      <h2>Platform safety</h2>
+      <div className="safety-grid">
+        <div className="stat">
+          <div className="label">Evacuation time</div>
+          <div className="value" style={{ color: evacColor(evac, cfg) }}>{mmss(evac)}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Occupancy</div>
+          <div className="value" style={{ color: zoneColor(pct, cfg) }}>{Math.round(pct * 100)}<small>%</small></div>
+        </div>
+        <div className="stat">
+          <div className="label">Inside now</div>
+          <div className="value">{occupancy}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Capacity</div>
+          <div className="value">{capacity}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Animated station strip
+// ---------------------------------------------------------------------------
+const GEO = { overtonX: 70, jonesX: 930, leftSigX: 360, rightSigX: 640, boxL: 400, boxR: 600, centerX: 500, yEast: 70, yWest: 156, boxTop: 44, boxBot: 182 };
+const DEPART_MS = 5000;
+
+function trainX(t, now, signals) {
+  const g = GEO;
+  const east = t.dir === "east_bound";
+  if (t.phase === "approach") {
+    // east_bound enters via the LEFT signal, west_bound via the RIGHT signal.
+    const side = east ? "LEFT" : "RIGHT";
+    const red = signals && signals[side] === "RED";
+    const platform = g.centerX - 23;
+    const start = east ? g.overtonX : g.jonesX;
+    // Free-run from the neighbour toward the platform over the ETA. On GREEN the
+    // train rolls straight in; on RED it is clamped just before its signal (so it
+    // visibly HOLDS at the light) and released forward the moment it turns green.
+    const dur = Math.max(1500, (t.eta || 6) * 1000);
+    const p = Math.min(1, (now - t.tApproach) / dur);
+    let x = start + p * (platform - start);
+    if (red) {
+      const stop = east ? g.leftSigX - 56 : g.rightSigX + 12;
+      x = east ? Math.min(x, stop) : Math.max(x, stop);
+    }
+    return x;
+  }
+  if (t.phase === "in_station") return g.centerX - 23;
+  // depart
+  const p = Math.min(1, (now - t.tDepart) / DEPART_MS);
+  return east ? g.centerX + p * (g.jonesX - g.centerX) : g.centerX - p * (g.centerX - g.overtonX);
+}
+
+function Train({ t, now, signals }) {
+  const g = GEO;
+  const y = t.dir === "east_bound" ? g.yEast : g.yWest;
+  const x = trainX(t, now, signals);
+  const fill = t.cap ? Math.min(1, (t.passengers || 0) / t.cap) : 0;
+  const color = t.dir === "east_bound" ? "var(--east)" : "var(--west)";
+  return (
+    <g transform={`translate(${x} ${y})`} style={{ transition: "none" }}>
+      <rect width="46" height="20" rx="4" fill="#0d1117" stroke={color} strokeWidth="1.5" />
+      <rect x="1.5" y="1.5" width={43 * fill} height="17" rx="3" fill={color} opacity="0.55" />
+      <text x="23" y="14" textAnchor="middle" fontSize="9" fill="#e6edf3" fontFamily="ui-monospace, monospace">{t.train_type || ""}</text>
+    </g>
+  );
+}
+
+function Signal({ x, cy, state }) {
+  const on = state === "RED" ? "var(--red)" : "var(--green)";
+  return (
+    <g transform={`translate(${x} ${cy})`}>
+      <rect x="-7" y="-19" width="14" height="38" rx="4" fill="#0d1117" stroke="#30363d" />
+      <circle cx="0" cy="-8" r="5" fill={state === "RED" ? on : "#3a2426"} />
+      <circle cx="0" cy="8" r="5" fill={state === "GREEN" ? on : "#213026"} />
+    </g>
+  );
+}
+
+function Neighbour({ x, label }) {
+  // A little roundel + name marking a neighbour station (train spawn/despawn
+  // point), placed in the gap between the two tracks.
+  return (
+    <g>
+      <g transform={`translate(${x} 110)`}>
+        <circle r="12" fill="#0d1117" stroke="#8b98a5" strokeWidth="3.5" />
+        <rect x="-16" y="-3.2" width="32" height="6.4" rx="1" fill="#8b98a5" />
+      </g>
+      <text x={x} y="140" textAnchor="middle" fill="var(--muted)" fontSize="13" fontWeight="700" letterSpacing="0.08em">{label}</text>
+    </g>
+  );
+}
+
+function StationStrip({ trains, signals, gateline, occupancy, capacity, cfg, now }) {
+  const g = GEO;
+  const pct = capacity ? occupancy / capacity : 0;
+  const fillH = (g.boxBot - g.boxTop) * Math.min(1, pct);
+  const gl = gateline.state;
+  const glColor = gl === "CLOSED" ? "var(--red)" : gl === "RESTRICTED" ? "var(--amber)" : "var(--green)";
+  const zc = zoneColor(pct, cfg);
+  const status = pct >= cfg.pct_critical ? "CRITICAL" : pct >= cfg.pct_high ? "HIGH" : pct >= cfg.pct_low ? "BUSY" : "NOMINAL";
+  return (
+    <div className="panel area-strip">
+      <h2>Live traffic</h2>
+      <svg viewBox="0 -20 1000 256">
+        {/* tracks */}
+        <line x1="30" y1={g.yEast + 10} x2="970" y2={g.yEast + 10} stroke="#233240" strokeWidth="3" />
+        <line x1="30" y1={g.yWest + 10} x2="970" y2={g.yWest + 10} stroke="#233240" strokeWidth="3" />
+        {/* neighbour stations (roundel + name, between the tracks) */}
+        <Neighbour x={g.overtonX} label={cfg.neighbour_west.replace(" Station", "").toUpperCase()} />
+        <Neighbour x={g.jonesX} label={cfg.neighbour_east.replace(" Station", "").toUpperCase()} />
+        {/* Tilley box with occupancy fill */}
+        <rect x={g.boxL} y={g.boxTop} width={g.boxR - g.boxL} height={g.boxBot - g.boxTop} rx="8" fill="#0d1117" stroke="#30363d" strokeWidth="1.5" />
+        <rect x={g.boxL} y={g.boxBot - fillH} width={g.boxR - g.boxL} height={fillH} rx="6"
+          fill={zc} opacity="0.30" style={{ transition: "height .4s, fill .4s, y .4s" }} />
+        {/* TILLEY roundel (the modelled station) */}
+        <g transform={`translate(${g.centerX} -3)`}>
+          <circle r="13" fill="#0d1117" stroke="#c9d1d9" strokeWidth="4" />
+          <rect x="-18" y="-3.6" width="36" height="7.2" rx="1" fill="#c9d1d9" />
+        </g>
+        <text x={g.centerX} y={g.boxTop - 8} textAnchor="middle" fill="var(--text)" fontSize="14" fontWeight="700">TILLEY</text>
+        {/* occupancy readout, centred in the gap between the tracks so passing
+            trains don't cover it: %, count/capacity, status */}
+        <text x={g.centerX} y={g.boxTop + 68} textAnchor="middle" fill="var(--text)" fontSize="26" fontWeight="800">{Math.round(pct * 100)}%</text>
+        <text x={g.centerX} y={g.boxTop + 88} textAnchor="middle" fill="var(--muted)" fontSize="12">{occupancy} / {capacity}</text>
+        <text x={g.centerX} y={g.boxTop + 106} textAnchor="middle" fill={zc} fontSize="11" fontWeight="800" letterSpacing="0.09em">{status}</text>
+        {/* gateline (street entry) */}
+        <g transform={`translate(${g.centerX} ${g.boxBot + 4})`}>
+          <rect x="-58" y="0" width="116" height="15" rx="3" fill="#0d1117" stroke={glColor} strokeWidth="2" />
+          <text x="0" y="11.5" textAnchor="middle" fontSize="9" fill={glColor} fontWeight="700" letterSpacing="0.03em">GATE {gl}</text>
+        </g>
+        {/* signals — each on the track it gates: LEFT=east (top), RIGHT=west (bottom) */}
+        <Signal x={g.leftSigX} cy={g.yEast + 10} state={signals.LEFT} />
+        <Signal x={g.rightSigX} cy={g.yWest + 10} state={signals.RIGHT} />
+        {/* trains */}
+        {trains.map((t) => <Train key={t.sid} t={t} now={now} signals={signals} />)}
+      </svg>
+      <div className="legend">
+        <span><i className="dot" style={{ background: "var(--east)" }}></i>east-bound →</span>
+        <span><i className="dot" style={{ background: "var(--west)" }}></i>← west-bound</span>
+        <span><i className="dot" style={{ background: glColor }}></i>gateline {gl}</span>
+        <span><i className="dot" style={{ background: signals.LEFT === "RED" ? "var(--red)" : "var(--green)" }}></i>LEFT {signals.LEFT}</span>
+        <span><i className="dot" style={{ background: signals.RIGHT === "RED" ? "var(--red)" : "var(--green)" }}></i>RIGHT {signals.RIGHT}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Charts (Chart.js)
+// ---------------------------------------------------------------------------
+function useChart(makeConfig) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    chartRef.current = new Chart(canvasRef.current.getContext("2d"), makeConfig());
+    return () => chartRef.current && chartRef.current.destroy();
+  }, []);
+  return [canvasRef, chartRef];
+}
+
+function OccupancyChart({ hist, capacity }) {
+  const [canvasRef, chartRef] = useChart(() => ({
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "occupancy", data: [], borderColor: "#58a6ff", backgroundColor: "rgba(88,166,255,.12)", fill: true, tension: .3, pointRadius: [], pointBackgroundColor: [] },
+      { label: "capacity", data: [], borderColor: "#f85149", borderDash: [6, 6], pointRadius: 0, tension: 0 },
+    ] },
+    options: baseChartOpts(),
+  }));
+  useEffect(() => {
+    const c = chartRef.current; if (!c) return;
+    c.data.labels = hist.map((p) => hhmmss(p.ts));
+    c.data.datasets[0].data = hist.map((p) => p.occ);
+    c.data.datasets[0].pointRadius = hist.map((p) => (p.anomaly ? 5 : 0));
+    c.data.datasets[0].pointBackgroundColor = hist.map((p) => (p.anomaly ? "#ff2d55" : "#58a6ff"));
+    c.data.datasets[1].data = hist.map(() => capacity);
+    c.options.scales.y.max = capacity * 1.15;
+    c.update("none");
+  }, [hist, capacity]);
+  return <div className="chart-box"><canvas ref={canvasRef}></canvas></div>;
+}
+
+function FlowChart({ hist }) {
+  const [canvasRef, chartRef] = useChart(() => ({
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "foot in", data: [], borderColor: "#58a6ff", tension: .3, pointRadius: 0 },
+      { label: "alight (wait)", data: [], borderColor: "#d29922", tension: .3, pointRadius: 0 },
+      { label: "board out", data: [], borderColor: "#2ea043", tension: .3, pointRadius: 0 },
+    ] },
+    options: baseChartOpts(),
+  }));
+  useEffect(() => {
+    const c = chartRef.current; if (!c) return;
+    c.data.labels = hist.map((p) => hhmmss(p.ts));
+    c.data.datasets[0].data = hist.map((p) => p.foot_in);
+    c.data.datasets[1].data = hist.map((p) => p.alight_wait);
+    c.data.datasets[2].data = hist.map((p) => p.board_total);
+    c.update("none");
+  }, [hist]);
+  return <div className="chart-box"><canvas ref={canvasRef}></canvas></div>;
+}
+
+function baseChartOpts() {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { labels: { color: "#8b98a5", boxWidth: 12, font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: "#6e7681", maxTicksLimit: 6, font: { size: 10 } }, grid: { color: "#1b232c" } },
+      y: { beginAtZero: true, ticks: { color: "#6e7681", font: { size: 10 } }, grid: { color: "#1b232c" } },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Feeds
+// ---------------------------------------------------------------------------
+function EventFeed({ items }) {
+  return (
+    <div className="panel area-feed">
+      <h2>Live event feed</h2>
+      <div className="feed-scroll">
+        {items.length === 0 && <div className="empty">Waiting for events…</div>}
+        <ul className="feed">
+          {items.map((e, i) => (
+            <li key={i}>
+              <span className="t">{hhmmss(e.ts)}</span>
+              <span className={`tag ${e.kind}`}>{e.kind}</span>
+              <span>{e.text}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function AIFeed({ items }) {
+  const a = items[0]; // latest advice only — a compact full-width banner
+  const line = (label, text) => text ? <div className="line"><b>{label}:</b> {text}</div> : null;
+  return (
+    <div className="panel area-ai">
+      <h2>AI supervisor advice</h2>
+      {!a && <div className="empty">No advice yet — trigger a rush hour to see the advisor act.</div>}
+      {a && (
+        <div className={`ai-card ${a.severity}`}>
+          <span className={`ai-chip ${a.severity}`}>{a.severity}</span>
+          <span className="ai-time">{hhmmss(a.ts)} · {a.trigger}</span>
+          {line("Assessment", a.assessment)}
+          {line("Actions", a.actions)}
+          {line("Watch", a.watch)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function parseSuggestion(s) {
+  const out = { severity: "MEDIUM", assessment: "", actions: "", watch: "" };
+  (s || "").split("\n").forEach((ln) => {
+    const m = ln.match(/^\s*(SEVERITY|ASSESSMENT|ACTIONS|WATCH)\s*:\s*(.*)$/i);
+    if (!m) return;
+    const k = m[1].toUpperCase();
+    if (k === "SEVERITY") out.severity = (m[2].trim().toUpperCase().match(/LOW|MEDIUM|HIGH/) || ["MEDIUM"])[0];
+    else out[k.toLowerCase()] = m[2].trim();
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
+function App() {
+  const [cfg, setCfg] = useState(DEFAULT_CFG);
+  const [connected, setConnected] = useState(false);
+  const [occ, setOcc] = useState({ occupancy: 0, capacity: DEFAULT_CFG.capacity });
+  const [occHist, setOccHist] = useState([]);
+  const [flowHist, setFlowHist] = useState([]);
+  const [signals, setSignals] = useState({ LEFT: "GREEN", RIGHT: "GREEN" });
+  const [gateline, setGateline] = useState({ state: "OPEN", throttle_factor: 1 });
+  const [feed, setFeed] = useState([]);
+  const [ai, setAi] = useState([]);
+  const [rush, setRush] = useState(false);
+  const [now, setNow] = useState(performance.now());
+
+  const trains = useRef(new Map());
+  const rushTimer = useRef(null);
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
+
+  const pushFeed = useCallback((kind, text) => {
+    setFeed((f) => [{ ts: Date.now(), kind, text }, ...f].slice(0, 60));
+  }, []);
+
+  const handle = useCallback((channel, p) => {
+    const c = cfgRef.current;
+    if (channel === "occupancy") {
+      setOcc({ occupancy: p.occupancy, capacity: p.capacity });
+      setOccHist((h) => clampArr([...h, { ts: Date.now(), occ: p.occupancy, anomaly: false }], 120));
+    } else if (channel === "metrics") {
+      setFlowHist((h) => clampArr([...h, { ts: Date.now(), foot_in: p.foot_in, alight_wait: p.alight_wait, board_total: p.board_total }], 60));
+    } else if (channel === "anomaly") {
+      setOccHist((h) => { if (!h.length) return h; const n = h.slice(); n[n.length - 1] = { ...n[n.length - 1], anomaly: true }; return n; });
+      pushFeed("signal", `ANOMALY on ${p.metric}: ${Math.round(p.actual)} vs ~${Math.round(p.forecast)}`);
+    } else if (channel === "signal") {
+      setSignals((s) => ({ ...s, [p.side]: p.state }));
+      pushFeed("signal", `${p.side} signal ${p.state} — ${p.reason}`);
+    } else if (channel === "gateline") {
+      setGateline({ state: p.state, throttle_factor: p.throttle_factor });
+      pushFeed("gateline", `Gateline ${p.state} — ${p.reason}`);
+    } else if (channel === "ai_suggestion") {
+      const parsed = parseSuggestion(p.suggestion);
+      setAi((a) => [{ ts: Date.now(), trigger: p.trigger, ...parsed }, ...a].slice(0, 12));
+    } else if (channel === "raw_event") {
+      const d = p.data || {};
+      if (p.event_type === "passengers_flow") {
+        if (d.passengers < 0) {
+          pushFeed("flow", `${-d.passengers} left the station (advised alternatives / buses)`);
+        } else {
+          pushFeed("flow", `${d.passengers} entered from the street`);
+        }
+      } else if (p.event_type === "train_in_transit") {
+        const arriving = d.next_stop === c.station_name;
+        const sid = d.service_id;
+        const cur = trains.current.get(sid) || {};
+        if (arriving) {
+          trains.current.set(sid, { sid, dir: d.direction_of_travel, train_type: d.train_type, cap: d.train_capacity, passengers: d.passengers, eta: d.eta, phase: "approach", tApproach: performance.now() });
+          pushFeed("train", `${d.direction_of_travel.replace("_", "-")} train approaching (${d.passengers} aboard)`);
+        } else {
+          trains.current.set(sid, { ...cur, sid, dir: d.direction_of_travel, train_type: d.train_type, cap: d.train_capacity || cur.cap, passengers: d.passengers, phase: "depart", tDepart: performance.now() });
+          pushFeed("train", `${d.direction_of_travel.replace("_", "-")} train departed to ${d.next_stop.replace(" Station", "")} (${d.passengers_boarding} boarded)`);
+        }
+      } else if (p.event_type === "train_in_station") {
+        const cur = trains.current.get(d.service_id);
+        if (cur) trains.current.set(d.service_id, { ...cur, phase: "in_station", tInStation: performance.now(), passengers: d.passengers_staying });
+        pushFeed("train", `train at platform: ${d.passengers_station} alight to wait, ${d.passengers_out} exit`);
+      }
+    }
+  }, [pushFeed]);
+
+  // load /config
+  useEffect(() => {
+    if (DEMO) return;
+    fetch("/config").then((r) => r.json()).then((c) => { setCfg(c); setOcc((o) => ({ ...o, capacity: c.capacity })); }).catch(() => {});
+  }, []);
+
+  // socket (live) or demo generator
+  useEffect(() => {
+    if (DEMO) { setConnected(true); return startDemo(handle, setRush); }
+    const socket = io();
+    socket.on("connect", () => setConnected(true));
+    socket.on("disconnect", () => setConnected(false));
+    ["raw_event", "occupancy", "metrics", "anomaly", "signal", "gateline", "ai_suggestion"]
+      .forEach((ch) => socket.on(ch, (p) => handle(ch, p)));
+    return () => socket.close();
+  }, [handle]);
+
+  // animation clock + train eviction
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = performance.now();
+      for (const [sid, tr] of trains.current) {
+        if (tr.phase === "depart" && t - tr.tDepart > DEPART_MS + 400) trains.current.delete(sid);
+      }
+      setNow(t);
+    }, 120);
+    return () => clearInterval(id);
+  }, []);
+
+  const toggleRush = useCallback(() => {
+    const next = !rush;
+    setRush(next);
+    if (rushTimer.current) { clearTimeout(rushTimer.current); rushTimer.current = null; }
+    if (DEMO) { window.__demoSurge && window.__demoSurge(next); }
+    else fetch(next ? "/demo/surge" : "/demo/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+    if (next) rushTimer.current = setTimeout(() => setRush(false), (cfgRef.current.surge_duration || 45) * 1000);
+  }, [rush]);
+
+  const trainList = Array.from(trains.current.values());
+
+  return (
+    <React.Fragment>
+      <header>
+        <span style={{ fontSize: 20 }}>🚇</span>
+        <h1>Tilley Station <span className="sub">: LIVE CROWD MANAGEMENT</span></h1>
+        <span className={`status ${connected ? "ok" : "bad"}`}>{connected ? (DEMO ? "demo" : "live") : "connecting…"}</span>
+        <div className="spacer"></div>
+        <div className="controls">
+          <button className={rush ? "" : "secondary"}
+            style={{ background: rush ? "var(--red)" : "var(--green)", borderColor: "transparent", minWidth: 168 }}
+            onClick={toggleRush}>
+            Rush Hour: {rush ? "YES" : "NO"}
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <AIFeed items={ai} />
+        <Safety occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} />
+        <StationStrip trains={trainList} signals={signals} gateline={gateline}
+          occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} now={now} />
+        <div className="panel area-chartA">
+          <h2>Occupancy over time</h2>
+          <OccupancyChart hist={occHist} capacity={occ.capacity} />
+        </div>
+        <div className="panel area-chartB">
+          <h2>Flow in / out (per window)</h2>
+          <FlowChart hist={flowHist} />
+        </div>
+        <EventFeed items={feed} />
+      </main>
+    </React.Fragment>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Demo generator (?demo=1) — synthesises a plausible stream, incl. a surge,
+// so the UI can be previewed without the cloud pipeline.
+// ---------------------------------------------------------------------------
+function startDemo(handle, setRush) {
+  const cfg = DEFAULT_CFG, cap = cfg.capacity;
+  let occ = Math.round(cap * 0.45);
+  let surgeUntil = 0, sid = 1;
+  let sig = { LEFT: "GREEN", RIGHT: "GREEN" }, gate = "OPEN", aiEpisode = false;
+  const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+  const now = () => Date.now();
+  window.__demoSurge = (on) => { surgeUntil = on ? now() + 30000 : 0; if (!on) occ = Math.round(cap * 0.45); };
+
+  const emitOcc = () => handle("occupancy", { station_name: cfg.station_name, occupancy: Math.max(0, occ), capacity: cap, event_time: now() });
+  const controls = () => {
+    const pct = occ / cap, evac = occ / cfg.evacuation_flow;
+    let want = pct >= cfg.pct_critical ? "GREEN" : pct >= cfg.pct_high ? "RED" : pct < cfg.pct_low ? "GREEN" : sig.LEFT;
+    if (want !== sig.LEFT) { sig = { LEFT: want, RIGHT: want };
+      ["LEFT", "RIGHT"].forEach((side) => handle("signal", { side, state: want, reason: want === "RED" ? `Holding arrivals: occupancy ${Math.round(pct*100)}%` : `Occupancy ${Math.round(pct*100)}%: normal running`, occupancy_at_decision: occ, event_time: now() })); }
+    let g = pct >= cfg.pct_critical || evac >= cfg.evac_crit ? "CLOSED" : pct >= cfg.pct_high || evac >= cfg.evac_warn ? "RESTRICTED" : "OPEN";
+    if (g !== gate) { gate = g; handle("gateline", { station_name: cfg.station_name, state: g, throttle_factor: g === "CLOSED" ? 0 : g === "RESTRICTED" ? 0.4 : 1, reason: `Occupancy ${Math.round(pct*100)}%`, event_time: now() }); }
+    if (pct >= cfg.pct_high && !aiEpisode) {
+      aiEpisode = true;
+      handle("anomaly", { window_start: now(), metric: "foot_in", actual: 300, forecast: 90, lower_bound: 40, upper_bound: 180, is_anomaly: true });
+      handle("ai_suggestion", { trigger: "threshold", metric: "occupancy_pct", severity: pct >= cfg.pct_critical ? "HIGH" : "MEDIUM",
+        suggestion: `SEVERITY: ${pct >= cfg.pct_critical ? "HIGH" : "MEDIUM"}\nASSESSMENT: Occupancy at ${Math.round(pct*100)}% driven by a foot-entry surge.\nACTIONS: 1) Restrict the street gateline. 2) Keep signals green so waiting passengers board out. 3) Station control and PA advising Overton and Jones.\nWATCH: Occupancy trend and the busier platform.`, event_time: now() });
+    }
+    if (pct < cfg.pct_low) aiEpisode = false;
+  };
+  const foot = () => {
+    const surge = now() < surgeUntil;
+    const base = rnd(cfg.foot_min || 1, cfg.foot_max || 40) * (surge ? 5 : 1);
+    const entered = Math.round(base * (gate === "CLOSED" ? 0 : gate === "RESTRICTED" ? 0.4 : 1));
+    if (entered > 0) { occ += entered; handle("raw_event", { event_type: "passengers_flow", data: { station_name: cfg.station_name, passengers: entered, event_time: now() } }); }
+    occ -= Math.round(occ * 0.03); // gentle drain toward mid-band
+    emitOcc(); controls();
+  };
+  const spawn = () => {
+    const east = Math.random() < 0.5;
+    const dir = east ? "east_bound" : "west_bound";
+    const types = { A72: 200, B85: 225, C98: 250, D11: 275 };
+    const tt = Object.keys(types)[rnd(0, 3)], tcap = types[tt];
+    const p = rnd(Math.round(tcap * 0.3), tcap);
+    const id = "d" + (sid++).toString(16).padStart(7, "0");
+    const eta = rnd(3, 7);
+    handle("raw_event", { event_type: "train_in_transit", data: { service_id: id, direction_of_travel: dir, next_stop: cfg.station_name, passengers: p, passengers_boarding: null, train_type: tt, train_capacity: tcap, eta, event_time: now() } });
+    const side = east ? "LEFT" : "RIGHT";
+    const arrive = () => {
+      if (sig[side] === "RED") { setTimeout(arrive, 800); return; }
+      const staying = Math.round(p * 0.3), out = Math.round((p - staying) * 0.5), station = p - staying - out;
+      occ += station;
+      handle("raw_event", { event_type: "train_in_station", data: { service_id: id, direction_of_travel: dir, passengers_staying: staying, passengers_out: out, passengers_station: station, train_type: tt, event_time: now() } });
+      setTimeout(() => {
+        const boarding = Math.min(Math.round(occ * 0.35), tcap - staying, occ);
+        occ -= boarding;
+        handle("raw_event", { event_type: "train_in_transit", data: { service_id: id, direction_of_travel: dir, next_stop: east ? cfg.neighbour_east : cfg.neighbour_west, passengers: staying + boarding, passengers_boarding: boarding, train_type: tt, train_capacity: tcap, eta: 0, event_time: now() } });
+      }, rnd(4000, 7000));
+    };
+    setTimeout(arrive, eta * 1000);
+  };
+  const metrics = () => {
+    const pct = occ / cap;
+    handle("metrics", { window_start: now(), window_end: now(), foot_in: rnd(40, 120), alight_wait: rnd(10, 60), alight_exit: rnd(20, 80), alight_total: rnd(30, 120), board_total: rnd(30, 100), net_change: rnd(-20, 40), occupancy: occ, occupancy_pct: pct, evac_time: occ / cfg.evacuation_flow });
+  };
+  emitOcc();
+  const iv = [setInterval(foot, 1500), setInterval(spawn, 3500), setInterval(metrics, 4000)];
+  // an automatic surge shortly after load so the preview shows the full story
+  setTimeout(() => { surgeUntil = now() + 25000; setRush(true); setTimeout(() => setRush(false), 25000); }, 6000);
+  return () => iv.forEach(clearInterval);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

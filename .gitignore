@@ -1,0 +1,31 @@
+# Secrets — real credentials never committed
+.env
+
+# Terraform state & local dirs (keep .terraform.lock.hcl in VCS)
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform/
+terraform/tf_outputs.json
+terraform/.terraform
+terraform/.terraform.lock.hcl
+*.tfplan
+
+# Terraform variable files may hold secrets — keep only the example
+terraform/*.tfvars
+!terraform/*.tfvars.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# NOTE: no node_modules / build dirs — the frontend has no build step.

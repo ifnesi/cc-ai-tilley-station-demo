@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "signal_state",
+  "namespace": "tilley",
+  "doc": "Control loop 1 (train signals / platform safety). Emitted only on state change. LEFT gates east_bound arrivals (from Overton); RIGHT gates west_bound arrivals (from Jones).",
+  "fields": [
+    { "name": "station_name", "type": "string" },
+    { "name": "side", "type": { "type": "enum", "name": "signal_side", "symbols": ["LEFT", "RIGHT"] } },
+    { "name": "state", "type": { "type": "enum", "name": "signal_value", "symbols": ["RED", "GREEN"] } },
+    { "name": "reason", "type": "string", "doc": "Human-readable reason for the UI/feed." },
+    { "name": "occupancy_at_decision", "type": "int" },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

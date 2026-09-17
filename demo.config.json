@@ -1,0 +1,12 @@
+{
+  "_comment": "Single source of truth for the shared DOMAIN constants. Read by BOTH Terraform (terraform/main.tf via jsondecode) and Python (emulator/reference.py). Secrets and Python-only runtime knobs (foot/train/surge rates) live in the root .env; cloud infra settings live in terraform/vars.tf. Change a value here once and both sides pick it up.",
+  "station_name": "Tilley Station",
+  "station_capacity": 1200,
+  "evacuation_flow": 3.5,
+  "agg_window_seconds": 15,
+  "pct_low": 0.70,
+  "pct_high": 0.85,
+  "pct_critical": 0.95,
+  "evac_warn": 360,
+  "evac_crit": 480
+}

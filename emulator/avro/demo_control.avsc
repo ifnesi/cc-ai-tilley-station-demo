@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "demo_control",
+  "namespace": "tilley",
+  "doc": "Presenter control channel. UI button -> backend -> this topic -> emulator. SURGE raises foot inflow for a bounded window; RESET returns to the normal mid-band.",
+  "fields": [
+    { "name": "command", "type": { "type": "enum", "name": "demo_command", "symbols": ["SURGE", "RESET"] } },
+    { "name": "factor", "type": ["null", "float"], "default": null, "doc": "Optional surge multiplier override (defaults to SURGE_FACTOR)." },
+    { "name": "duration_seconds", "type": ["null", "int"], "default": null, "doc": "Optional surge duration override (defaults to SURGE_DURATION)." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

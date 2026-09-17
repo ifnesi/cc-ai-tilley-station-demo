@@ -1,0 +1,17 @@
+{
+  "type": "record",
+  "name": "train_in_transit",
+  "namespace": "tilley",
+  "doc": "A train approaching (next_stop = Tilley Station) or departing (next_stop = a neighbour) Tilley. Distinguish approach vs departure by next_stop everywhere.",
+  "fields": [
+    { "name": "service_id", "type": "string", "doc": "Stable 8-char hex id across the 3-event lifecycle of one train run." },
+    { "name": "direction_of_travel", "type": { "type": "enum", "name": "direction_of_travel", "symbols": ["west_bound", "east_bound"] } },
+    { "name": "next_stop", "type": "string", "doc": "'Tilley Station' on approach; a neighbour ('Overton Station'/'Jones Station') on departure." },
+    { "name": "passengers", "type": "int", "doc": "On approach: onboard load P. On departure: passengers_staying + passengers_boarding." },
+    { "name": "passengers_boarding", "type": ["null", "int"], "default": null, "doc": "null/0 on approach; set on departure. People already waiting who board and leave (drains occupancy)." },
+    { "name": "train_type", "type": "string" },
+    { "name": "train_capacity", "type": "int" },
+    { "name": "eta", "type": "int", "doc": "Seconds to the entry signal (approach)." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

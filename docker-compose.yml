@@ -1,0 +1,33 @@
+# Run the Tilley Station app layer with just Docker — no Python, venv, or pip.
+#
+#   docker compose up --build          # emulator + backend (dashboard on :8080)
+#   docker compose --profile mock up   # backend + synthetic feed (no emulator)
+#
+# All services connect to your Confluent Cloud cluster using the credentials in
+# .env (written there by `terraform apply`). .env must be plain KEY=VALUE.
+services:
+  backend:
+    build: .
+    image: tilley-station:latest
+    command: python -m backend.run
+    env_file: .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  emulator:
+    build: .
+    image: tilley-station:latest
+    command: python -m emulator.run
+    env_file: .env
+    restart: unless-stopped
+
+  # Alternative to the emulator: synthetic Avro to every topic (a scripted surge
+  # and simplified control loops). Enable with `--profile mock`.
+  mockfeed:
+    build: .
+    image: tilley-station:latest
+    command: python -m tools.mockfeed
+    env_file: .env
+    profiles: ["mock"]
+    restart: unless-stopped

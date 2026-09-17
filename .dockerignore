@@ -1,0 +1,17 @@
+# Keep the build context (and image) small and secret-free.
+.venv/
+venv/
+.git/
+.gitignore
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Never bake secrets or local state into the image
+.env
+terraform/
+
+# Not needed at runtime
+*.md
+.DS_Store

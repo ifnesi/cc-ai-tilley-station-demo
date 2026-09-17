@@ -1,0 +1,13 @@
+{
+  "type": "record",
+  "name": "gateline_state",
+  "namespace": "tilley",
+  "doc": "Control loop 2 (street gateline / the real cap on total occupancy). Emitted only on state change. throttle_factor: OPEN=1.0, RESTRICTED=0.4, CLOSED=0.0.",
+  "fields": [
+    { "name": "station_name", "type": "string" },
+    { "name": "state", "type": { "type": "enum", "name": "gateline_value", "symbols": ["OPEN", "RESTRICTED", "CLOSED"] } },
+    { "name": "throttle_factor", "type": "float", "doc": "1.0 / 0.4 / 0.0 applied to street foot inflow." },
+    { "name": "reason", "type": "string", "doc": "Human-readable reason for the UI/feed." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "train_in_station",
+  "namespace": "tilley",
+  "doc": "A train dwelling at Tilley platform. Emitted only after the entry signal is GREEN. Arriving load P splits into three groups: P = passengers_staying + passengers_out + passengers_station.",
+  "fields": [
+    { "name": "service_id", "type": "string" },
+    { "name": "direction_of_travel", "type": { "type": "enum", "name": "direction_of_travel", "symbols": ["west_bound", "east_bound"] } },
+    { "name": "passengers_staying", "type": "int", "doc": "Remain onboard through Tilley. No occupancy effect." },
+    { "name": "passengers_out", "type": "int", "doc": "Alight and exit to the street. Pass-through: no occupancy effect." },
+    { "name": "passengers_station", "type": "int", "doc": "Alight and wait for a later train. Joins occupancy." },
+    { "name": "train_type", "type": "string" },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}
