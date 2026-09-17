@@ -462,57 +462,10 @@ resource "confluent_flink_statement" "anomalies" {
   depends_on = [confluent_flink_statement.metrics, confluent_flink_statement.metrics_read_uncommitted]
 }
 
-# ---------------------------------------------------------------------------
-# 3) Signal control loop -> signal_state
-# ---------------------------------------------------------------------------
-resource "confluent_flink_statement" "signal_control" {
-  organization {
-    id = data.confluent_organization.org.id
-  }
-  environment {
-    id = confluent_environment.env.id
-  }
-  compute_pool {
-    id = confluent_flink_compute_pool.pool.id
-  }
-  principal {
-    id = confluent_service_account.app_manager.id
-  }
-  statement     = templatefile("${path.module}/sql/03_signal_control.sql", local.sql_vars)
-  properties    = local.flink_statement_properties_dml
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
-  credentials {
-    key    = confluent_api_key.flink.id
-    secret = confluent_api_key.flink.secret
-  }
-  depends_on = [confluent_flink_statement.watermark]
-}
-
-# ---------------------------------------------------------------------------
-# 4) Gateline control loop -> gateline_state
-# ---------------------------------------------------------------------------
-resource "confluent_flink_statement" "gateline_control" {
-  organization {
-    id = data.confluent_organization.org.id
-  }
-  environment {
-    id = confluent_environment.env.id
-  }
-  compute_pool {
-    id = confluent_flink_compute_pool.pool.id
-  }
-  principal {
-    id = confluent_service_account.app_manager.id
-  }
-  statement     = templatefile("${path.module}/sql/04_gateline_control.sql", local.sql_vars)
-  properties    = local.flink_statement_properties_dml
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
-  credentials {
-    key    = confluent_api_key.flink.id
-    secret = confluent_api_key.flink.secret
-  }
-  depends_on = [confluent_flink_statement.watermark]
-}
+# NOTE: signals + gateline are now DETERMINISTIC and owned by the Python emulator
+# (it publishes signal_state / gateline_state directly). The former Flink control
+# loops (03_signal_control, 04_gateline_control) have been removed — Flink is
+# analytics only: windowed metrics, ML anomaly detection, and the advisory AI.
 
 # AI resources used to be gated behind a count (enable_ai_statements). They are
 # now always created; these moved blocks migrate any existing [0]-indexed state
@@ -617,8 +570,6 @@ resource "confluent_flink_statement" "ai_suggestions" {
   depends_on = [
     confluent_flink_statement.ai_model,
     confluent_flink_statement.anomalies,
-    confluent_flink_statement.signal_control,
-    confluent_flink_statement.gateline_control,
     confluent_flink_statement.metrics_read_uncommitted,
   ]
 }

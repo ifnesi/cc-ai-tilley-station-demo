@@ -88,18 +88,6 @@ class StationState:
             self._occupancy -= boarding
             return boarding
 
-    def street_egress(self, desired: int) -> int:
-        """Passengers leave via the street (advised to use alternatives / buses).
-
-        leaving = min(desired, occupancy); occupancy -= leaving. Returns leaving
-        (>= 0). Like board_out, it can never remove more than are present, so
-        occupancy is mathematically incapable of going negative.
-        """
-        with self._lock:
-            leaving = min(max(0, desired), self._occupancy)
-            self._occupancy -= leaving
-            return leaving
-
     # --- signals ----------------------------------------------------------
 
     def set_signal(self, side: str, state: str) -> None:
@@ -150,19 +138,17 @@ class StationState:
     def reset(self) -> None:
         """Return to a clean steady state.
 
-        Clears the surge and returns occupancy to the normal mid-band, and also
-        restores the local control state to its defaults — gateline OPEN
-        (throttle 1.0) and both signals GREEN. Without resetting the throttle, a
-        surge that left the gateline CLOSED (throttle 0) would keep foot inflow
-        at zero after a reset until Flink happened to re-emit an OPEN; the closed
-        loop then re-asserts control from the live occupancy.
+        Clears the surge and returns occupancy to the normal mid-band, and opens
+        the gateline (throttle 1.0) so foot inflow can resume immediately; the
+        emulator re-derives the gateline band on the next tick. Signals are left
+        untouched — they are the emulator's block-signal state (a train may still
+        be dwelling), and it publishes GREEN when the platform actually clears.
         """
         with self._lock:
             self._surge_factor = 1.0
             self._surge_expiry = 0.0
             self._occupancy = self._initial_occupancy
             self._throttle = 1.0
-            self._signal = {ref.SIDE_LEFT: "GREEN", ref.SIDE_RIGHT: "GREEN"}
 
     # --- snapshot ---------------------------------------------------------
 

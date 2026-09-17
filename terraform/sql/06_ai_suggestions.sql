@@ -113,17 +113,17 @@ prompted AS (
         ELSE 'ELEVATED'
       END,
       '. ',
-      'Current controls: LEFT signal ',
-      CASE WHEN pct >= ${pct_high} AND pct < ${pct_critical} THEN 'RED' ELSE 'GREEN' END,
-      ', RIGHT signal ',
-      CASE WHEN pct >= ${pct_high} AND pct < ${pct_critical} THEN 'RED' ELSE 'GREEN' END,
-      ', gateline ',
+      -- The station runs deterministic controls automatically (block signalling
+      -- holds trains while a platform is occupied; the gateline throttles street
+      -- inflow by occupancy). Give the duty supervisor the human judgement on
+      -- top. The gateline band is a function of occupancy, so it is stated here.
+      'Street gateline currently ',
       CASE
         WHEN pct >= ${pct_critical} THEN 'CLOSED'
         WHEN pct >= ${pct_high} THEN 'RESTRICTED'
         ELSE 'OPEN'
       END,
-      '. Recommend the operational response.'
+      '. Recommend the operational response for staff.'
     ) AS prompt
   FROM unified
 )

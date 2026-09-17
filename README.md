@@ -5,41 +5,42 @@ Confluent Cloud. It models crowd safety at a fictional London Underground
 station, **Tilley**, on one line between two neighbours — **Overton** (west) and
 **Jones** (east).
 
-Passengers pour into Tilley from the street and from arriving trains. Confluent
-watches the crowd in real time and, on its own, **holds trains at red signals**
-and **throttles the street gateline** before the station overflows — then
-**releases the trains** so waiting passengers can board and leave. A **GenAI
-advisor** tells the duty supervisor exactly what to do, all within seconds, end
-to end.
+Passengers pour into Tilley from the street and from arriving trains. The
+station runs its own **deterministic operational controls** — block signalling
+(a train holds the platform, the next one queues at a red) and an occupancy-based
+street gateline. On top of that operational event stream, **Confluent Cloud
+provides the intelligence**: real-time crowd metrics, ML anomaly detection, and a
+**GenAI advisor** that turns anomalies into plain-English guidance for the duty
+supervisor — all within seconds, end to end.
 
-The tube theme is just the vehicle. What it actually demonstrates:
+That separation is the point: control that *should* be deterministic stays
+deterministic; the streaming platform adds observability, ML, and AI-assisted
+decision support. The tube theme is just the vehicle. What it demonstrates:
 
 - **Apache Kafka** as the backbone every event flows through.
 - **Apache Flink (SQL)** for real-time windowed metrics and stream processing.
-- **Flink built-in ML** (`ML_DETECT_ANOMALIES`) spotting abnormal crowd spikes.
+- **Flink built-in ML** (`ML_DETECT_ANOMALIES`) spotting abnormal crowd spikes —
+  the filter that decides which events are worth escalating.
 - **Flink AI inference** (`ML_PREDICT` on **AWS Bedrock**, Claude Sonnet) turning
-  alerts into plain-English operational advice.
-- **Two closed-loop controllers** in Flink SQL that act back on the system —
-  and a deadlock-breaker that keeps the station from ever getting stuck.
-- **AI as actuator** — the advisor appends machine directives the emulator parses
-  and acts on: at critical occupancy it dispatches an empty **relief train** that
-  bypasses the signals, and when it advises alternatives/buses it lets a batch of
-  passengers **leave via the street** (occupancy is never allowed to go negative).
+  those anomalies into plain-English operational advice for the ops/safety team.
+- **Deterministic operational control in the emulator** (block signalling +
+  gateline) — a clean separation from the analytics/AI, published to Kafka so it
+  is part of the same event-driven stream.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
   subgraph local["Runs on your machine (Docker)"]
-    EM["Python emulator<br/>(owns occupancy,<br/>runs the trains)"]
+    EM["Python emulator<br/>owns occupancy · runs trains<br/>deterministic signals + gateline"]
     BE["Flask + Socket.IO<br/>backend"]
     UI["Browser dashboard"]
   end
 
   subgraph cloud["Confluent Cloud"]
-    RAW["Raw topics<br/>passengers_flow · train_in_transit<br/>train_in_station · station_occupancy"]
-    FLINK["Flink SQL<br/>windowed metrics · ML anomalies<br/>signal + gateline control · AI advisor"]
-    DER["Derived topics<br/>station_metrics · station_anomalies<br/>signal_state · gateline_state · station_ai_suggestions"]
+    RAW["Emulator topics<br/>passengers_flow · train_in_transit · train_in_station<br/>station_occupancy · signal_state · gateline_state"]
+    FLINK["Flink SQL (analytics only)<br/>windowed metrics · ML anomaly filter · AI advisor"]
+    DER["Derived topics<br/>station_metrics · station_anomalies<br/>station_ai_suggestions"]
   end
 
   BR["AWS Bedrock<br/>(GenAI)"]
@@ -49,16 +50,17 @@ flowchart LR
   RAW --> BE
   DER --> BE -->|WebSocket| UI
   UI -->|Rush Hour toggle| BE -->|demo_control| EM
-  DER -->|signal_state · gateline_state<br/>ai_suggestions → relief train / street egress| EM
 ```
 
-**The closed loop:** the emulator produces passenger and train events and is the
-single source of truth for how many people are inside (occupancy is guaranteed
-never to go negative). Flink aggregates those events, detects anomalies, and
-decides the control state. The emulator consumes that control state back —
-holding trains at red and throttling street inflow — which changes occupancy,
-and the loop repeats. The browser sees everything live over WebSockets, and the
-presenter can trigger a crowd surge on demand.
+**The flow:** the emulator is the single source of truth for occupancy
+(guaranteed never negative) and for the operational controls — it runs block
+signalling and the gateline **deterministically**, and publishes everything
+(raw events + `signal_state` + `gateline_state`) to Kafka. Flink is **analytics
+only**: it aggregates the stream into windowed metrics, uses `ML_DETECT_ANOMALIES`
+to filter for genuinely abnormal crowd events, and calls Bedrock (`ML_PREDICT`)
+to turn those into advice for staff — it does **not** control the station. The
+browser sees everything live over WebSockets, and the presenter can trigger a
+crowd surge on demand (`demo_control`).
 
 ## What you need
 
@@ -114,20 +116,18 @@ docker compose up --build
 This starts the **emulator** (generates traffic) and the **backend** (serves the
 dashboard). Open **http://localhost:8080**.
 
-The dashboard shows an occupancy gauge, a platform-safety panel (evacuation
-time), an animated station strip (trains approaching, holding at signals,
-dwelling and departing; the Tilley box fills with the crowd; signals and the
+The dashboard shows a platform-safety panel (evacuation time), an animated
+station strip (trains approaching, queueing behind a red signal, dwelling at the
+platform and departing; the Tilley box fills with the crowd; signals and the
 street gateline change colour), an occupancy chart with anomaly markers, a
 flow-in/out chart, a live event feed, and the AI advisor's advice.
 
 Flip the **Rush Hour** toggle (top-right, red when on) to trigger a surge and
-watch the system react — signals hold at red, the gateline restricts then
-closes, an anomaly is flagged, and the advisor speaks. As it climbs, the advisor
-also advises alternatives/buses and a batch of passengers **leaves via the
-street** (a negative flow in the feed). At critical occupancy the signals force
-green *and* the advisor calls for the standby **relief train**, which the
-emulator dispatches (an empty reserve that boards the crowd out) so occupancy
-drains. Flip it back to reset.
+watch the system react — as occupancy climbs the gateline **restricts** then
+**closes** to cap street inflow, `ML_DETECT_ANOMALIES` flags the spike, and the
+**AI advisor** posts concrete guidance for the ops/safety team. Trains keep
+cycling through the platform (block signalling), draining the crowd, until the
+gateline reopens. Flip it back to reset.
 
 Stop with `Ctrl-C`, or `docker compose down`. (Re-run with `--build` whenever you
 change the frontend, since it's baked into the image.)
@@ -190,23 +190,26 @@ tube-station/
 ```
 
 - **Emulator** — generates foot traffic and a per-train lifecycle (approach →
-  dwell → depart), owns occupancy, and obeys the control state coming back from
-  Flink (signals, gateline) plus the AI directives (dispatch the relief train,
-  divert passengers to the street). Self-stabilising boarding keeps occupancy in a
-  healthy mid-band during normal operation; only a surge pushes it critical, and
-  it recovers afterwards.
-- **Flink SQL** (`terraform/sql/`) — windowed crowd metrics, `ML_DETECT_ANOMALIES`
-  on foot/alighting spikes, the signal and gateline control loops (emit-on-change),
-  and the Bedrock-backed AI advisor (which appends machine directives —
-  `DISPATCH_RELIEF_TRAIN` at critical occupancy, `DIVERT_TO_STREET` when advising
-  alternatives — that the emulator parses and acts on).
+  dwell → depart), owns occupancy, and runs the two **deterministic** operational
+  controls itself: **block signalling** (one train per platform per direction;
+  the signal is RED while a train dwells and following trains queue behind it) and
+  the **gateline** (throttles street inflow by occupancy band). It publishes
+  `signal_state` and `gateline_state` to Kafka. Self-stabilising boarding keeps
+  occupancy in a healthy mid-band; only a surge pushes it critical, and it
+  recovers. The only control it consumes is the presenter's `demo_control`.
+- **Flink SQL** (`terraform/sql/`) — **analytics only**: windowed crowd metrics
+  (`01`), `ML_DETECT_ANOMALIES` on foot/alighting spikes as the filter (`02`), and
+  the Bedrock-backed advisory AI (`05`/`06`, `ML_PREDICT`) triggered by those
+  anomalies/thresholds. It derives insight from the stream; it does not control
+  the station.
 - **Backend** — one Socket.IO channel per stream (`occupancy`, `metrics`,
   `anomaly`, `signal`, `gateline`, `ai_suggestion`, plus raw events) and the
   `POST /demo/surge` / `POST /demo/reset` control endpoints.
 - **Frontend** — a single React page served at `/` (loaded from CDNs, no build
-  step or `npm`): occupancy gauge, safety panel, animated SVG station strip,
-  Chart.js occupancy/flow charts, live event + AI-advice feeds, and the Rush
-  Hour toggle. Append `?demo=1` for a cloud-free preview.
+  step or `npm`): platform-safety panel, animated SVG station strip (with the
+  occupancy readout inside the Tilley box, and trains that queue behind red
+  signals), Chart.js occupancy/flow charts, live event + AI-advice feeds, and the
+  Rush Hour toggle. Append `?demo=1` for a cloud-free preview.
 
 ## Developing without Docker
 

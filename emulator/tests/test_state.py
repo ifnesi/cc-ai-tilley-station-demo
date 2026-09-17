@@ -56,14 +56,13 @@ def test_reset_returns_to_midband_and_clears_surge():
     st.start_surge(5.0, 60)
     st.alight_to_wait(300)
     st.set_throttle(0.0)                 # gateline CLOSED during the surge
-    st.set_signal(ref.SIDE_LEFT, "RED")
     assert st.occupancy == 750
     st.reset()
     assert st.occupancy == 450
     assert st.surge_active() is False
-    # reset also restores the local control state so foot inflow can resume
+    # reset reopens the gateline so foot inflow can resume; signals are the
+    # emulator's block-signal state and are left untouched here.
     assert st.throttle == 1.0
-    assert st.is_red(ref.SIDE_LEFT) is False
 
 
 def test_signal_hold_flags():

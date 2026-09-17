@@ -1,12 +1,21 @@
-"""Threaded emulator orchestrator.
+"""Threaded emulator orchestrator — the station's deterministic control system.
 
-Owns the foot loop, the train spawn loop + per-train state machine, and (when
-Kafka is configured) the three control consumer threads that close the loop by
-updating StationState from signal_state / gateline_state / demo_control.
+Owns the foot loop and the train spawn loop + per-train state machine, and it is
+the authority for the two deterministic operational controls (no Flink/AI):
+
+* Signals (block signalling): one train per platform per direction. While a train
+  dwells, that side's signal is RED and following trains queue behind it in
+  order; it goes GREEN when the platform clears and the next train advances.
+* Gateline: throttles street inflow straight from occupancy bands
+  (OPEN / RESTRICTED / CLOSED).
+
+Both are published to Kafka (signal_state / gateline_state) so the dashboard and
+Flink see them. The only control the emulator consumes is demo_control (the
+presenter's surge/reset). Flink is purely analytics: windowed metrics, ML anomaly
+detection, and an advisory GenAI message — it does not control the station.
 
 The per-step methods (``foot_tick``, ``emit_approach``, ``arrive``, ``depart``)
-are side-effect-scoped and reused by the fast simulator and the tests, so the
-lifecycle logic is exercised without real sleeps where possible.
+are side-effect-scoped and reused by the fast simulator and the tests.
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ import logging
 import random
 import threading
 import uuid
+from collections import deque
 
 from . import model, producers, reference as ref
 from .config import EmulatorConfig
@@ -44,12 +54,17 @@ class Emulator:
         self._threads: list[threading.Thread] = []
         self._trains: set[threading.Thread] = set()
         self._trains_lock = threading.Lock()
-        # AI-directed relief train, armed once per critical episode. Armed at
-        # start; disarmed on dispatch; re-armed when occupancy drains back below
-        # PCT_LOW (the episode is over). Guards against acting on repeated or
-        # stale directives while the station is still critical.
-        self._relief_armed = True
-        self._relief_lock = threading.Lock()
+
+        # Block signalling: one train per platform per direction. A FIFO queue of
+        # waiting service_ids per side + an "occupied" flag, coordinated by a
+        # Condition, so trains enter the platform in arrival order and queue
+        # behind the signal instead of overlapping.
+        self._platform_cv = threading.Condition()
+        self._platform_occupied = {ref.SIDE_LEFT: False, ref.SIDE_RIGHT: False}
+        self._platform_queue = {ref.SIDE_LEFT: deque(), ref.SIDE_RIGHT: deque()}
+
+        # Last published gateline state (for emit-on-change).
+        self._gateline_state = "OPEN"
 
     # --- emit helpers ------------------------------------------------------
 
@@ -64,29 +79,51 @@ class Emulator:
     # --- foot loop ---------------------------------------------------------
 
     def foot_tick(self) -> int:
-        """One foot-flow tick: admit street inflow, emit flow (if any) + heartbeat."""
+        """One foot-flow tick: set the gateline, admit street inflow, heartbeat."""
+        # Deterministic gateline first, so the throttle it sets applies this tick.
+        self._update_gateline()
         base = self.rng.randint(self.config.foot_min, self.config.foot_max)
-        # Local safety net: never admit street inflow at/above CRITICAL occupancy,
-        # even if the gateline control loop is stalled/stale. Flink's gateline is
-        # still the primary control; this only prevents a runaway if it goes quiet.
-        if self.state.occupancy_pct() >= ref.PCT_CRITICAL:
-            entered = 0
-        else:
-            entered = self.state.admit_foot(base)
+        entered = self.state.admit_foot(base)  # admit_foot applies the throttle
         if entered > 0:
             self.producer.send(
                 "passengers_flow",
                 producers.foot_record(self.config.station_name, entered),
             )
-        # Always heartbeat so the control loops keep seeing occupancy even when
-        # the gateline is CLOSED (entered == 0) — needed to reopen it later.
+        # Always heartbeat so occupancy is visible even when the gateline is
+        # CLOSED (entered == 0), and so the analytics pipeline keeps flowing.
         self._emit_heartbeat()
-        # Re-arm the relief train once the crowd has drained back to normal, so
-        # the next critical episode can dispatch a fresh reserve.
-        if self.state.occupancy_pct() < ref.PCT_LOW:
-            with self._relief_lock:
-                self._relief_armed = True
         return entered
+
+    # --- deterministic gateline control -----------------------------------
+
+    def _update_gateline(self) -> None:
+        """Set the street gateline straight from occupancy (deterministic rule).
+
+        OPEN < HIGH <= RESTRICTED < CRITICAL <= CLOSED (evac time can also trip
+        the higher band). Sets the throttle StationState applies to foot inflow
+        and publishes gateline_state on change (emit-on-change) for the dashboard.
+        """
+        pct = self.state.occupancy_pct()
+        evac = self.state.evac_time()
+        if pct >= ref.PCT_CRITICAL or evac >= ref.EVAC_CRIT:
+            state, throttle = "CLOSED", ref.THROTTLE_CLOSED
+        elif pct >= ref.PCT_HIGH or evac >= ref.EVAC_WARN:
+            state, throttle = "RESTRICTED", ref.THROTTLE_RESTRICTED
+        else:
+            state, throttle = "OPEN", ref.THROTTLE_OPEN
+        self.state.set_throttle(throttle)
+        if state != self._gateline_state:
+            self._gateline_state = state
+            pctn = int(round(pct * 100))
+            reason = {
+                "CLOSED": f"CRITICAL {pctn}%: closing the street gateline",
+                "RESTRICTED": f"Occupancy {pctn}% over HIGH: restricting street inflow",
+                "OPEN": f"Occupancy {pctn}% nominal: gateline open",
+            }[state]
+            self.producer.send(
+                "gateline_state",
+                producers.gateline_record(self.config.station_name, state, throttle, reason),
+            )
 
     def _foot_loop(self) -> None:
         while not self._stop.is_set():
@@ -112,26 +149,6 @@ class Emulator:
             side=ref.entry_side(direction),
             eta=self.rng.randint(self.config.eta_min, self.config.eta_max),
             staying=0,
-        )
-
-    def new_relief_spec(self) -> TrainSpec:
-        """An empty, full-capacity reserve train dispatched at critical occupancy.
-
-        Arrives empty (no alighting), so its whole capacity is spare for boarding
-        people out, reaches the platform fast, and is flagged ``relief`` so it
-        bypasses the signals (control clears the road for the reserve).
-        """
-        direction = self.rng.choice(ref.DIRECTIONS)
-        return TrainSpec(
-            service_id="relief-" + uuid.uuid4().hex[:6],
-            direction=direction,
-            train_type=ref.RELIEF_TRAIN_TYPE,
-            capacity=ref.RELIEF_TRAIN_CAPACITY,
-            passengers=0,                       # empty reserve
-            side=ref.entry_side(direction),
-            eta=self.config.relief_eta,
-            staying=0,
-            relief=True,
         )
 
     def emit_approach(self, spec: TrainSpec) -> None:
@@ -160,13 +177,7 @@ class Emulator:
 
     def depart(self, spec: TrainSpec) -> int:
         spare = spec["capacity"] - spec["staying"]
-        if spec.get("relief"):
-            # A relief train is dedicated to draining the crowd: fill every spare
-            # seat (capped by occupancy and spare inside board_out), rather than
-            # the fractional self-stabilising demand a normal service takes.
-            desired = self.state.occupancy
-        else:
-            desired = model.desired_boarding(self.state.occupancy, self.config.board_fraction)
+        desired = model.desired_boarding(self.state.occupancy, self.config.board_fraction)
         boarding = self.state.board_out(desired, spare)
         self.producer.send(
             "train_in_transit",
@@ -178,28 +189,61 @@ class Emulator:
         self._emit_heartbeat()
         return boarding
 
-    def _wait_for_green(self, side: str) -> bool:
-        """Hold at a RED signal, re-polling. Returns True if released, False if stopped.
+    # --- deterministic block signalling -----------------------------------
 
-        Deadlock-breaker safety net: at/above CRITICAL occupancy, proceed even if
-        the signal is (a possibly stale) RED — trains are the only drain, so they
-        must never be held when the station is overfull. Flink's signal loop is
-        still the primary control; this only rescues a stalled/stale RED.
-        """
-        while self.state.is_red(side) and self.state.occupancy_pct() < ref.PCT_CRITICAL:
-            if self._stop.wait(self.config.signal_poll_interval):
+    def _set_signal(self, side: str, state: str, reason: str) -> None:
+        """Set a signal and publish signal_state on change (emit-on-change)."""
+        if self.state.get_signal(side) == state:
+            return
+        self.state.set_signal(side, state)
+        self.producer.send(
+            "signal_state",
+            producers.signal_record(
+                self.config.station_name, side, state, reason, self.state.occupancy
+            ),
+        )
+
+    def _acquire_platform(self, spec: TrainSpec) -> bool:
+        """Join the side's FIFO queue and block until the platform is free and it
+        is this train's turn. Sets the signal RED (platform now occupied). Returns
+        False if the emulator stopped while waiting."""
+        side = spec["side"]
+        sid = spec["service_id"]
+        with self._platform_cv:
+            self._platform_queue[side].append(sid)
+            while not self._stop.is_set() and not (
+                not self._platform_occupied[side] and self._platform_queue[side][0] == sid
+            ):
+                self._platform_cv.wait(0.2)
+            if self._stop.is_set():
+                if sid in self._platform_queue[side]:
+                    self._platform_queue[side].remove(sid)
+                self._platform_cv.notify_all()
                 return False
+            self._platform_queue[side].popleft()
+            self._platform_occupied[side] = True
+        d = spec["direction"].replace("_", "-")
+        self._set_signal(side, "RED", f"{d} train at the platform; holding arrivals")
         return True
 
+    def _release_platform(self, spec: TrainSpec) -> None:
+        """Free the platform, wake the next queued train, set the signal GREEN."""
+        side = spec["side"]
+        with self._platform_cv:
+            self._platform_occupied[side] = False
+            self._platform_cv.notify_all()
+        self._set_signal(side, "GREEN", "Platform clear; arrivals released")
+
     def _train_task(self, spec: TrainSpec) -> None:
+        acquired = False
         try:
             self.emit_approach(spec)
-            if self._stop.wait(spec["eta"]):
+            if self._stop.wait(spec["eta"]):  # travel to the signal
                 return
-            # A relief train bypasses the signals — it is an emergency reserve the
-            # controller clears straight to the platform to board people out.
-            if not spec.get("relief") and not self._wait_for_green(spec["side"]):
-                return  # stopped while held at RED
+            # Block: wait for a free platform on this side, in arrival order.
+            if not self._acquire_platform(spec):
+                return
+            acquired = True
             self.arrive(spec)
             dwell = self.rng.randint(self.config.dwell_min, self.config.dwell_max)
             if self._stop.wait(dwell):
@@ -208,6 +252,8 @@ class Emulator:
         except Exception:
             log.exception("train task failed")
         finally:
+            if acquired:
+                self._release_platform(spec)
             with self._trains_lock:
                 self._trains.discard(threading.current_thread())
 
@@ -217,49 +263,6 @@ class Emulator:
         with self._trains_lock:
             self._trains.add(t)
         t.start()
-
-    def dispatch_relief_train(self) -> bool:
-        """AI-directed: bring the standby reserve into service to drain the crowd.
-
-        Called from the AI-suggestion consumer when the advisor emits the
-        ``DISPATCH_RELIEF_TRAIN`` directive. Fires at most once per critical
-        episode (the latch is re-armed once occupancy drains below PCT_LOW), and
-        only while the station is genuinely busy (>= PCT_HIGH), so a stale
-        directive arriving after recovery is ignored. Returns True if dispatched.
-        """
-        with self._relief_lock:
-            if not self._relief_armed or self.state.occupancy_pct() < ref.PCT_HIGH:
-                return False
-            self._relief_armed = False
-        log.info(
-            "AI directive: dispatching relief train (occupancy %.0f%%)",
-            self.state.occupancy_pct() * 100,
-        )
-        self._spawn_train(self.new_relief_spec())
-        return True
-
-    def divert_to_street(self) -> int:
-        """AI-directed: let waiting passengers leave via the street.
-
-        Actuates the advisor recommending alternatives / buses / other stations
-        (toolkit item 6). A batch of the current crowd leaves on foot, emitted as
-        a NEGATIVE passengers_flow so the WebUI shows people leaving. Only acts
-        while the station is genuinely busy (>= PCT_HIGH); StationState.street_egress
-        can never remove more than are present, so occupancy never goes negative.
-        Returns the number who left (>= 0).
-        """
-        if self.state.occupancy_pct() < ref.PCT_HIGH:
-            return 0
-        want = round(self.state.occupancy * self.config.street_divert_fraction)
-        leaving = self.state.street_egress(want)
-        if leaving > 0:
-            self.producer.send(
-                "passengers_flow",
-                producers.foot_record(self.config.station_name, -leaving),
-            )
-            log.info("AI directive: %d passengers left via the street (alternatives/buses)", leaving)
-        self._emit_heartbeat()
-        return leaving
 
     def _train_spawn_loop(self) -> None:
         while not self._stop.is_set():
@@ -293,8 +296,25 @@ class Emulator:
 
     # --- lifecycle --------------------------------------------------------
 
+    def _emit_initial_controls(self) -> None:
+        """Publish the starting control state so the dashboard shows it at once."""
+        self.producer.send(
+            "gateline_state",
+            producers.gateline_record(
+                self.config.station_name, "OPEN", ref.THROTTLE_OPEN, "Gateline open"
+            ),
+        )
+        for side in (ref.SIDE_LEFT, ref.SIDE_RIGHT):
+            self.producer.send(
+                "signal_state",
+                producers.signal_record(
+                    self.config.station_name, side, "GREEN", "Platform clear", self.state.occupancy
+                ),
+            )
+
     def start(self, with_control_consumers: bool = True) -> None:
         self._emit_heartbeat()
+        self._emit_initial_controls()
         self._start_thread(self._foot_loop, "foot-loop")
         self._start_thread(self._train_spawn_loop, "train-spawn")
         if self.config.auto_surge_after > 0:
@@ -302,16 +322,9 @@ class Emulator:
         if with_control_consumers and self.config.kafka_configured:
             from .control_consumers import ControlConsumers
 
-            # Map each AI directive token to the emulator action it actuates. The
-            # advisor appends these (stripped from the human-facing advice); adding
-            # a new AI-driven action is just a new entry here + a prompt line.
-            self._control = ControlConsumers(
-                self.config, self.state,
-                ai_directives={
-                    ref.RELIEF_DIRECTIVE: self.dispatch_relief_train,
-                    ref.DIVERT_DIRECTIVE: self.divert_to_street,
-                },
-            )
+            # The emulator now OWNS signals + gateline (deterministic); the only
+            # control it consumes is the presenter's surge/reset (demo_control).
+            self._control = ControlConsumers(self.config, self.state)
             self._control.start()
 
     def _start_thread(self, target, name) -> None:

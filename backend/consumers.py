@@ -58,25 +58,12 @@ def to_wire(value: Any) -> Any:
     return value
 
 
-# The AI advisor appends a machine directive line (DIRECTIVE: DISPATCH_RELIEF_TRAIN)
-# that the emulator acts on; strip it from the human-facing suggestion so the
-# dashboard tile shows only the SEVERITY/ASSESSMENT/ACTIONS/WATCH block.
-_DIRECTIVE_MARKER = "DIRECTIVE:"
-
-
-def _strip_directive(suggestion: str) -> str:
-    lines = [ln for ln in suggestion.splitlines() if not ln.lstrip().startswith(_DIRECTIVE_MARKER)]
-    return "\n".join(lines).rstrip()
-
-
 def build_message(topic: str, record: dict) -> tuple[str, dict]:
     """Return ``(channel, payload)`` for a deserialised record from ``topic``."""
     channel = TOPIC_CHANNELS[topic]
     data = to_wire(record)
     if channel == "raw_event":
         return channel, {"event_type": topic, "data": data}
-    if channel == "ai_suggestion" and isinstance(data.get("suggestion"), str):
-        data["suggestion"] = _strip_directive(data["suggestion"])
     return channel, data
 
 

@@ -53,14 +53,6 @@ class EmulatorConfig:
     surge_duration: int = 45
     auto_surge_after: int = 0          # 0 = disabled
 
-    # AI-directed relief train: how quickly the standby reserve reaches the
-    # platform once the advisor calls for it (short — it is already on standby).
-    relief_eta: int = 2
-
-    # AI-directed street egress: fraction of the current crowd that leaves via the
-    # street (for alternatives / buses) each time the advisor calls for it.
-    street_divert_fraction: float = 0.08
-
     # Occupancy the emulator starts at / returns to on RESET (mid-band).
     initial_occupancy_fraction: float = 0.45
 
@@ -99,8 +91,6 @@ class EmulatorConfig:
             surge_factor=float(e.get("SURGE_FACTOR", "5")),
             surge_duration=int(e.get("SURGE_DURATION", "45")),
             auto_surge_after=int(e.get("AUTO_SURGE_AFTER", "0")),
-            relief_eta=int(e.get("RELIEF_ETA", "2")),
-            street_divert_fraction=float(e.get("STREET_DIVERT_FRACTION", "0.08")),
             # Occupancy the station starts at / returns to on RESET, as a fraction
             # of capacity. Clamped to [0, 1]; default 0.45 (a healthy mid-band).
             initial_occupancy_fraction=min(

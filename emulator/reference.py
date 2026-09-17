@@ -62,21 +62,13 @@ TRAIN_DATA: dict[str, dict[str, int]] = {
 
 TRAIN_TYPES: list[str] = list(TRAIN_DATA)
 
-# --- AI-directed relief train ------------------------------------------
-# At critical occupancy the AI advisor recommends bringing the standby reserve
-# train into service to board people out. The advisor appends this exact machine
-# directive; the emulator parses it off station_ai_suggestions and dispatches an
-# empty, full-capacity relief train that bypasses the signals (control clears the
-# road for the reserve). train_type is a free string, so the relief service is
-# labelled distinctly for the strip/feed.
-RELIEF_DIRECTIVE = "DISPATCH_RELIEF_TRAIN"
-RELIEF_TRAIN_TYPE = "RELIEF"
-RELIEF_TRAIN_CAPACITY: int = max(t["capacity"] for t in TRAIN_DATA.values())
-
-# When the advisor recommends customer information / alternative stations / buses
-# to shed demand, it appends this directive; the emulator lets a batch of waiting
-# passengers leave via the street (a negative passengers_flow), never below zero.
-DIVERT_DIRECTIVE = "DIVERT_TO_STREET"
+# --- Deterministic gateline throttle bands (emulator-controlled) -------
+# The emulator sets the street gateline directly from its own occupancy — a
+# deterministic operational rule, no Flink/AI needed. throttle multiplies the
+# street foot inflow: OPEN=1.0, RESTRICTED=0.4, CLOSED=0.0.
+THROTTLE_OPEN = 1.0
+THROTTLE_RESTRICTED = 0.4
+THROTTLE_CLOSED = 0.0
 
 # --- Geography & direction convention --------------------------------
 

@@ -39,15 +39,10 @@ INTERPRETATION
 - A low dip usually signals upstream disruption: verify with line control, inform customers, prepare for a surge when service resumes.
 - For a directional imbalance, target the busier side and platform.
 
-MACHINE DIRECTIVES (the automation acts on these exact lines)
-- Relief train: the station has one standby relief train — an empty reserve cleared straight to a platform to board waiting passengers out fast. When Status is CRITICAL (occupancy at or above 95 percent), you MUST recommend dispatching it in ACTIONS and add a line reading exactly: DIRECTIVE: DISPATCH_RELIEF_TRAIN.
-- Street egress: when you advise passengers to use alternative stations (Overton or Jones), buses, or other transport to shed demand (customer information, appropriate only at Status HIGH or CRITICAL), you MUST add a line reading exactly: DIRECTIVE: DIVERT_TO_STREET.
-- Only add a DIRECTIVE line when its condition holds. You may add both when both apply. Never add a directive at Status ELEVATED.
-
-OUTPUT FORMAT (plain text, no markdown, at most 70 words)
+OUTPUT FORMAT (plain text, no markdown, at most 60 words, exactly these four lines)
 SEVERITY: LOW or MEDIUM or HIGH
 ASSESSMENT: one short sentence naming the likely cause.
 ACTIONS: two or three numbered concrete steps from the toolkit, tailored to the metric, direction, and current controls.
 WATCH: one metric or condition to monitor next.
-Then, only if their conditions hold, one DIRECTIVE line each (DIRECTIVE: DISPATCH_RELIEF_TRAIN and/or DIRECTIVE: DIVERT_TO_STREET). Output only those lines and nothing else.'
+Output only those four lines and nothing else.'
 );

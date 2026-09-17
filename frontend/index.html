@@ -83,38 +83,42 @@ function Safety({ occupancy, capacity, cfg }) {
 // ---------------------------------------------------------------------------
 const GEO = { overtonX: 70, jonesX: 930, leftSigX: 360, rightSigX: 640, boxL: 400, boxR: 600, centerX: 500, yEast: 70, yWest: 156, boxTop: 44, boxBot: 182 };
 const DEPART_MS = 5000;
+const ROLLIN_MS = 900;         // roll from the signal into the platform
+const QUEUE_SPACING = 54;      // train width (46) + gap, for stacking behind a red
 
-function trainX(t, now, signals) {
+// Block signalling: an approaching train free-runs to its queue slot behind the
+// signal and holds there (front train at the stop line, the rest stacked behind
+// it — no overlap). It leaves the queue only when its in_station event arrives,
+// then rolls into the platform. queueIndex is its rank in the side's queue.
+function trainX(t, now, queueIndex) {
   const g = GEO;
   const east = t.dir === "east_bound";
+  const eastStop = g.leftSigX - 56;    // front edge just short of the LEFT signal
+  const westStop = g.rightSigX + 12;   // front edge just short of the RIGHT signal
+  const platform = g.centerX - 23;
   if (t.phase === "approach") {
-    // east_bound enters via the LEFT signal, west_bound via the RIGHT signal.
-    const side = east ? "LEFT" : "RIGHT";
-    const red = signals && signals[side] === "RED";
-    const platform = g.centerX - 23;
     const start = east ? g.overtonX : g.jonesX;
-    // Free-run from the neighbour toward the platform over the ETA. On GREEN the
-    // train rolls straight in; on RED it is clamped just before its signal (so it
-    // visibly HOLDS at the light) and released forward the moment it turns green.
+    const idx = queueIndex || 0;
+    const slot = east ? eastStop - idx * QUEUE_SPACING : westStop + idx * QUEUE_SPACING;
     const dur = Math.max(1500, (t.eta || 6) * 1000);
     const p = Math.min(1, (now - t.tApproach) / dur);
-    let x = start + p * (platform - start);
-    if (red) {
-      const stop = east ? g.leftSigX - 56 : g.rightSigX + 12;
-      x = east ? Math.min(x, stop) : Math.max(x, stop);
-    }
-    return x;
+    let x = start + p * (slot - start);
+    return east ? Math.min(x, slot) : Math.max(x, slot);  // never pass the slot
   }
-  if (t.phase === "in_station") return g.centerX - 23;
+  if (t.phase === "in_station") {
+    const from = east ? eastStop : westStop;
+    const p = Math.min(1, (now - (t.tInStation || now)) / ROLLIN_MS);
+    return from + p * (platform - from);
+  }
   // depart
   const p = Math.min(1, (now - t.tDepart) / DEPART_MS);
   return east ? g.centerX + p * (g.jonesX - g.centerX) : g.centerX - p * (g.centerX - g.overtonX);
 }
 
-function Train({ t, now, signals }) {
+function Train({ t, now, queueIndex }) {
   const g = GEO;
   const y = t.dir === "east_bound" ? g.yEast : g.yWest;
-  const x = trainX(t, now, signals);
+  const x = trainX(t, now, queueIndex);
   const fill = t.cap ? Math.min(1, (t.passengers || 0) / t.cap) : 0;
   const color = t.dir === "east_bound" ? "var(--east)" : "var(--west)";
   return (
@@ -192,8 +196,17 @@ function StationStrip({ trains, signals, gateline, occupancy, capacity, cfg, now
         {/* signals — each on the track it gates: LEFT=east (top), RIGHT=west (bottom) */}
         <Signal x={g.leftSigX} cy={g.yEast + 10} state={signals.LEFT} />
         <Signal x={g.rightSigX} cy={g.yWest + 10} state={signals.RIGHT} />
-        {/* trains */}
-        {trains.map((t) => <Train key={t.sid} t={t} now={now} signals={signals} />)}
+        {/* trains — queue index per side (approach trains, by arrival order) so
+            following trains stack behind the signal instead of overlapping */}
+        {(() => {
+          const q = new Map();
+          ["east_bound", "west_bound"].forEach((dir) => {
+            trains.filter((t) => t.phase === "approach" && t.dir === dir)
+              .sort((a, b) => (a.tApproach || 0) - (b.tApproach || 0))
+              .forEach((t, i) => q.set(t.sid, i));
+          });
+          return trains.map((t) => <Train key={t.sid} t={t} now={now} queueIndex={q.get(t.sid) || 0} />);
+        })()}
       </svg>
       <div className="legend">
         <span><i className="dot" style={{ background: "var(--east)" }}></i>east-bound →</span>
@@ -375,11 +388,7 @@ function App() {
     } else if (channel === "raw_event") {
       const d = p.data || {};
       if (p.event_type === "passengers_flow") {
-        if (d.passengers < 0) {
-          pushFeed("flow", `${-d.passengers} left the station (advised alternatives / buses)`);
-        } else {
-          pushFeed("flow", `${d.passengers} entered from the street`);
-        }
+        pushFeed("flow", `${d.passengers} entered from the street`);
       } else if (p.event_type === "train_in_transit") {
         const arriving = d.next_stop === c.station_name;
         const sid = d.service_id;
@@ -483,16 +492,20 @@ function startDemo(handle, setRush) {
   let occ = Math.round(cap * 0.45);
   let surgeUntil = 0, sid = 1;
   let sig = { LEFT: "GREEN", RIGHT: "GREEN" }, gate = "OPEN", aiEpisode = false;
+  const platformBusy = { LEFT: false, RIGHT: false };  // block signalling
   const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
   const now = () => Date.now();
   window.__demoSurge = (on) => { surgeUntil = on ? now() + 30000 : 0; if (!on) occ = Math.round(cap * 0.45); };
 
   const emitOcc = () => handle("occupancy", { station_name: cfg.station_name, occupancy: Math.max(0, occ), capacity: cap, event_time: now() });
+  const setSignal = (side, state, reason) => {
+    if (sig[side] === state) return;
+    sig[side] = state;
+    handle("signal", { side, state, reason, occupancy_at_decision: Math.max(0, occ), event_time: now() });
+  };
+  // Deterministic gateline (occupancy bands) + anomaly-filtered advisory AI.
   const controls = () => {
     const pct = occ / cap, evac = occ / cfg.evacuation_flow;
-    let want = pct >= cfg.pct_critical ? "GREEN" : pct >= cfg.pct_high ? "RED" : pct < cfg.pct_low ? "GREEN" : sig.LEFT;
-    if (want !== sig.LEFT) { sig = { LEFT: want, RIGHT: want };
-      ["LEFT", "RIGHT"].forEach((side) => handle("signal", { side, state: want, reason: want === "RED" ? `Holding arrivals: occupancy ${Math.round(pct*100)}%` : `Occupancy ${Math.round(pct*100)}%: normal running`, occupancy_at_decision: occ, event_time: now() })); }
     let g = pct >= cfg.pct_critical || evac >= cfg.evac_crit ? "CLOSED" : pct >= cfg.pct_high || evac >= cfg.evac_warn ? "RESTRICTED" : "OPEN";
     if (g !== gate) { gate = g; handle("gateline", { station_name: cfg.station_name, state: g, throttle_factor: g === "CLOSED" ? 0 : g === "RESTRICTED" ? 0.4 : 1, reason: `Occupancy ${Math.round(pct*100)}%`, event_time: now() }); }
     if (pct >= cfg.pct_high && !aiEpisode) {
@@ -522,7 +535,10 @@ function startDemo(handle, setRush) {
     handle("raw_event", { event_type: "train_in_transit", data: { service_id: id, direction_of_travel: dir, next_stop: cfg.station_name, passengers: p, passengers_boarding: null, train_type: tt, train_capacity: tcap, eta, event_time: now() } });
     const side = east ? "LEFT" : "RIGHT";
     const arrive = () => {
-      if (sig[side] === "RED") { setTimeout(arrive, 800); return; }
+      // Block signalling: wait for a free platform on this side (queue behind).
+      if (platformBusy[side]) { setTimeout(arrive, 500); return; }
+      platformBusy[side] = true;
+      setSignal(side, "RED", `${dir.replace("_", "-")} train at the platform; holding arrivals`);
       const staying = Math.round(p * 0.3), out = Math.round((p - staying) * 0.5), station = p - staying - out;
       occ += station;
       handle("raw_event", { event_type: "train_in_station", data: { service_id: id, direction_of_travel: dir, passengers_staying: staying, passengers_out: out, passengers_station: station, train_type: tt, event_time: now() } });
@@ -530,6 +546,8 @@ function startDemo(handle, setRush) {
         const boarding = Math.min(Math.round(occ * 0.35), tcap - staying, occ);
         occ -= boarding;
         handle("raw_event", { event_type: "train_in_transit", data: { service_id: id, direction_of_travel: dir, next_stop: east ? cfg.neighbour_east : cfg.neighbour_west, passengers: staying + boarding, passengers_boarding: boarding, train_type: tt, train_capacity: tcap, eta: 0, event_time: now() } });
+        platformBusy[side] = false;
+        setSignal(side, "GREEN", "Platform clear; arrivals released");
       }, rnd(4000, 7000));
     };
     setTimeout(arrive, eta * 1000);

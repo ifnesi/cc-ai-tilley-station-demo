@@ -14,13 +14,17 @@ from typing import Optional, Protocol
 from . import reference as ref
 from .schemas import load_schema, load_schema_str
 
-# The emulator only produces the four raw display topics; demo_control is
-# consumed, and the derived topics belong to Flink.
+# The emulator produces the four raw display topics AND the two control-state
+# topics (signals + gateline are now deterministic, emulator-controlled). Flink
+# owns the derived analytics topics (metrics, anomalies, AI suggestions);
+# demo_control is consumed.
 EMULATOR_PRODUCED_TOPICS = (
     "train_in_transit",
     "train_in_station",
     "passengers_flow",
     "station_occupancy",
+    "signal_state",
+    "gateline_state",
 )
 
 
@@ -173,5 +177,26 @@ def depart_record(
         "train_type": train_type,
         "train_capacity": train_capacity,
         "eta": 0,
+        "event_time": now(),
+    }
+
+
+def signal_record(station_name: str, side: str, state: str, reason: str, occupancy: int) -> dict:
+    return {
+        "station_name": station_name,
+        "side": side,               # LEFT gates east_bound, RIGHT gates west_bound
+        "state": state,             # RED | GREEN
+        "reason": reason,
+        "occupancy_at_decision": max(0, occupancy),
+        "event_time": now(),
+    }
+
+
+def gateline_record(station_name: str, state: str, throttle_factor: float, reason: str) -> dict:
+    return {
+        "station_name": station_name,
+        "state": state,                     # OPEN | RESTRICTED | CLOSED
+        "throttle_factor": float(throttle_factor),
+        "reason": reason,
         "event_time": now(),
     }
