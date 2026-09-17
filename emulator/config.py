@@ -101,6 +101,11 @@ class EmulatorConfig:
             auto_surge_after=int(e.get("AUTO_SURGE_AFTER", "0")),
             relief_eta=int(e.get("RELIEF_ETA", "2")),
             street_divert_fraction=float(e.get("STREET_DIVERT_FRACTION", "0.08")),
+            # Occupancy the station starts at / returns to on RESET, as a fraction
+            # of capacity. Clamped to [0, 1]; default 0.45 (a healthy mid-band).
+            initial_occupancy_fraction=min(
+                1.0, max(0.0, float(e.get("INITIAL_OCCUPANCY_FRACTION", "0.45")))
+            ),
             consumer_group=e.get("CONSUMER_GROUP", "tilley-emulator"),
         )
 

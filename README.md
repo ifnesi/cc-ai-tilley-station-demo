@@ -165,7 +165,7 @@ Each setting lives in exactly one place:
 | File | Holds |
 |---|---|
 | **`demo.config.json`** | shared domain constants — station capacity, evacuation flow, aggregation window, and the crowd thresholds. Read by both Terraform and the Python apps. |
-| **`.env`** (git-ignored) | secrets (Confluent/AWS keys) and app runtime knobs (passenger/train/surge rates). Kafka + Schema Registry values are written here automatically by `terraform apply`. Plain `KEY=VALUE` lines. |
+| **`.env`** (git-ignored) | secrets (Confluent/AWS keys) and app runtime knobs — passenger/train/surge rates, and `INITIAL_OCCUPANCY_FRACTION` (starting/RESET occupancy as a fraction of capacity, default `0.45`). Kafka + Schema Registry values are written here automatically by `terraform apply`. Plain `KEY=VALUE` lines. |
 | **`terraform/vars.tf`** (+ `terraform.tfvars`) | cloud infrastructure — region, cluster, compute units, retention, Bedrock model. |
 
 Change a threshold or the window once in `demo.config.json` and both the Flink
