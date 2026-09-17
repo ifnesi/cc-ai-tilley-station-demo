@@ -266,22 +266,37 @@ and resolves from two env vars:
 }
 ```
 
-- **`CC_MCP_URL`** — Terraform builds it and writes it into `.env`
-  (`https://mcp.<region>.<cloud>.confluent.cloud/mcp/v1/context-engine/organizations/<org>/environments/<env>/kafka-clusters/<lkc>`).
-- **`CC_MCP_AUTH`** — you create this yourself. The **regional** managed-MCP
-  server only accepts a **Global API key** (or a Flink key); it rejects a plain
-  **Cloud** API key with `404 resource_not_found` — and a Cloud key is the only
-  kind Terraform's provider can create, which is why this one step is manual:
-  1. Console → **Cloud API keys → Add key → *Global***, owned by the
-     **`mcp-reader`** service account Terraform created
-     (`terraform output mcp_reader_service_account`) so it inherits the
-     read-only RBAC.
-  2. Base64-encode `key:secret` into `.env` (it's a secret; `.env` is git-ignored):
-     ```bash
-     echo "CC_MCP_AUTH=$(printf '%s:%s' <KEY> <SECRET> | base64)" >> .env
-     ```
+- **`CC_MCP_URL`** — Terraform builds this and writes it into `.env`. It's the
+  **regional, cluster-scoped** endpoint:
+  `https://mcp.<region>.<cloud>.confluent.cloud/mcp/v1/context-engine/organizations/<org>/environments/<env>/kafka-clusters/<lkc>`
+- **`CC_MCP_AUTH`** — **you create this yourself** (Terraform does not generate
+  it). The regional managed-MCP server only accepts a **Global API key**; it
+  rejects a plain Cloud API key with `404 resource_not_found`, and a Global key
+  is the one credential the Terraform provider **cannot** mint — so it's a
+  one-time manual step (see below).
 
-Then launch Claude Code from the repo root — both values come from `.env`:
+### Create the Global API key (one time)
+
+1. In the Confluent Cloud Console, go to **Cloud API keys → Add key → Granular
+   access → *Global***.
+2. Set the **owner** to the **`mcp-reader`** service account Terraform created,
+   so the key inherits its read-only RBAC:
+   ```bash
+   cd terraform && terraform output mcp_reader_service_account   # the SA id to pick as owner
+   ```
+3. Copy the key + secret, base64-encode `key:secret` (use `printf`, **not**
+   `echo` — a trailing newline causes a `401`), and set it as `CC_MCP_AUTH` in
+   your root `.env` (it's a secret; `.env` is git-ignored):
+   ```bash
+   printf '%s:%s' <GLOBAL_KEY> <GLOBAL_SECRET> | base64      # paste result as CC_MCP_AUTH=… in .env
+   ```
+
+`terraform apply` never overwrites `CC_MCP_AUTH`, so it persists across future
+applies.
+
+### Launch Claude Code
+
+From the repo root, with both values now in `.env`:
 
 ```bash
 set -a; source .env; set +a          # exports CC_MCP_URL + CC_MCP_AUTH
