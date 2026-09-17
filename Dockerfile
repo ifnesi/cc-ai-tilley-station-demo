@@ -14,7 +14,8 @@ COPY emulator/requirements.txt emulator/requirements.txt
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r emulator/requirements.txt -r backend/requirements.txt
 
-# Application code (all config comes from the .env passed at runtime).
+# Application code. All config comes from the runtime environment (docker-compose
+# env_file: .env) — nothing is baked in, and .env is never copied.
 COPY emulator/ emulator/
 COPY backend/ backend/
 COPY frontend/ frontend/

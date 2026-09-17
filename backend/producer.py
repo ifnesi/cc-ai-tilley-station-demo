@@ -103,3 +103,62 @@ class DemoControlProducer:
         self._producer.flush(5)
         log.info("Produced demo_control %s (factor=%s, duration=%s)", command, factor, duration_seconds)
         return record
+
+
+class QuestionError(ValueError):
+    """Raised on invalid operator-question input (maps to HTTP 4xx)."""
+
+
+def build_operator_question(question: str, station_name: str, question_id: Optional[str] = None) -> dict:
+    """Build and validate an operator_questions record (matches the .avsc)."""
+    import uuid
+
+    q = (question or "").strip()
+    if not q:
+        raise QuestionError("question is required")
+    if len(q) > 500:
+        raise QuestionError("question too long (max 500 characters)")
+    return {
+        "question_id": question_id or uuid.uuid4().hex,
+        "question": q,
+        "station_name": station_name,
+        "event_time": _now(),
+    }
+
+
+class QuestionProducer:
+    """Serialises an operator_questions record and produces it to Kafka.
+
+    The dashboard's Ask-AI modal POSTs a question; Flink (07) enriches it with the
+    latest metrics/anomalies, calls Bedrock, and writes operator_answers, which the
+    backend routes back to the browser by question_id.
+    """
+
+    def __init__(self, producer: Any, serializer: Any, topic: str = "operator_questions"):
+        self._producer = producer
+        self._serializer = serializer
+        self._topic = topic
+
+    @classmethod
+    def from_config(cls, config) -> "QuestionProducer":
+        from confluent_kafka import Producer
+        from confluent_kafka.schema_registry import SchemaRegistryClient
+        from confluent_kafka.schema_registry.avro import AvroSerializer
+
+        from emulator.schemas import load_schema_str
+
+        sr = SchemaRegistryClient(config.schema_registry_config())
+        serializer = AvroSerializer(sr, load_schema_str("operator_questions"))
+        producer = Producer(config.producer_config())
+        return cls(producer, serializer)
+
+    def send(self, question: str, station_name: str, question_id: Optional[str] = None) -> dict:
+        from confluent_kafka.serialization import MessageField, SerializationContext
+
+        record = build_operator_question(question, station_name, question_id)
+        ctx = SerializationContext(self._topic, MessageField.VALUE)
+        value = self._serializer(record, ctx)
+        self._producer.produce(self._topic, value=value)
+        self._producer.flush(5)
+        log.info("Produced operator_question %s", record["question_id"])
+        return record

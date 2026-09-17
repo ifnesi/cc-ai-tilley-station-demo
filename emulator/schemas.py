@@ -19,6 +19,7 @@ RAW_TOPICS: tuple[str, ...] = (
     "passengers_flow",
     "station_occupancy",
     "demo_control",
+    "operator_questions",
 )
 DERIVED_TOPICS: tuple[str, ...] = (
     "station_metrics",
@@ -26,6 +27,7 @@ DERIVED_TOPICS: tuple[str, ...] = (
     "signal_state",
     "gateline_state",
     "station_ai_suggestions",
+    "operator_answers",
 )
 ALL_TOPICS: tuple[str, ...] = RAW_TOPICS + DERIVED_TOPICS
 

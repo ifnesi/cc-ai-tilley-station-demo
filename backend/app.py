@@ -22,7 +22,7 @@ from flask_socketio import SocketIO
 from emulator import reference as ref
 
 from .config import FRONTEND_DIR, Config
-from .producer import DemoControlError
+from .producer import DemoControlError, QuestionError
 
 log = logging.getLogger("tilley.app")
 
@@ -30,6 +30,7 @@ log = logging.getLogger("tilley.app")
 def create_app(
     *,
     demo_producer=None,
+    question_producer=None,
     config: Optional[Config] = None,
     async_mode: str = "threading",
     frontend_dir: Optional[Path] = None,
@@ -40,6 +41,7 @@ def create_app(
     app = Flask(__name__, static_folder=None)
     app.config["FRONTEND_DIR"] = str(frontend_dir)
     app.demo_producer = demo_producer  # type: ignore[attr-defined]
+    app.question_producer = question_producer  # type: ignore[attr-defined]
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
 
@@ -78,6 +80,22 @@ def create_app(
     @app.post("/demo/reset")
     def demo_reset():
         return _dispatch("RESET")
+
+    @app.post("/ask")
+    def ask():
+        producer = app.question_producer  # type: ignore[attr-defined]
+        if producer is None:
+            return jsonify(error="ask unavailable: no producer configured"), 503
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify(error="request body must be a JSON object"), 400
+        try:
+            record = producer.send(question=body.get("question", ""), station_name=ref.STATION_NAME)
+        except QuestionError as exc:
+            return jsonify(error=str(exc)), 400
+        # The answer arrives asynchronously on the 'operator_answer' Socket.IO
+        # channel (Flink -> operator_answers -> backend), correlated by question_id.
+        return jsonify(status="accepted", question_id=record["question_id"], question=record["question"]), 202
 
     @app.get("/health")
     def health():

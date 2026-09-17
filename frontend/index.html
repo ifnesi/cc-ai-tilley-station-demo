@@ -296,6 +296,34 @@ function parseSuggestion(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Ask-AI modal — operator question -> Kafka -> Flink (+ live context) -> Bedrock
+// ---------------------------------------------------------------------------
+function AskModal({ ask, setAsk, submitAsk }) {
+  const [text, setText] = useState("");
+  const close = () => setAsk({ open: false, q: "", answer: null, pending: false, id: null });
+  return (
+    <div className="modal-overlay" onClick={close}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Ask the AI supervisor</h2>
+        <p className="modal-sub">Your question is merged with the live station metrics + anomalies in Flink, then answered by Bedrock.</p>
+        <textarea className="modal-input" rows="3" autoFocus
+          placeholder="e.g. The westbound platform is filling fast — what should I do?"
+          value={text} onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitAsk(text); }} />
+        <div className="modal-actions">
+          <button className="secondary" onClick={close}>Close</button>
+          <button onClick={() => submitAsk(text)} disabled={ask.pending || !text.trim()}>
+            {ask.pending ? "Asking…" : "Ask"}
+          </button>
+        </div>
+        {ask.pending && <div className="modal-answer muted">Consulting the AI with live context…</div>}
+        {ask.answer && <div className="modal-answer"><b>AI:</b> {ask.answer}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 function App() {
@@ -310,6 +338,7 @@ function App() {
   const [ai, setAi] = useState([]);
   const [rush, setRush] = useState(false);
   const [now, setNow] = useState(performance.now());
+  const [ask, setAsk] = useState({ open: false, q: "", answer: null, pending: false, id: null });
 
   const trains = useRef(new Map());
   const rushTimer = useRef(null);
@@ -339,6 +368,8 @@ function App() {
     } else if (channel === "ai_suggestion") {
       const parsed = parseSuggestion(p.suggestion);
       setAi((a) => [{ ts: Date.now(), trigger: p.trigger, ...parsed }, ...a].slice(0, 12));
+    } else if (channel === "operator_answer") {
+      setAsk((a) => (a.id && p.question_id === a.id) ? { ...a, answer: p.answer, pending: false } : a);
     } else if (channel === "raw_event") {
       const d = p.data || {};
       if (p.event_type === "passengers_flow") {
@@ -383,7 +414,7 @@ function App() {
     const socket = io();
     socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => setConnected(false));
-    ["raw_event", "occupancy", "metrics", "anomaly", "signal", "gateline", "ai_suggestion"]
+    ["raw_event", "occupancy", "metrics", "anomaly", "signal", "gateline", "ai_suggestion", "operator_answer"]
       .forEach((ch) => socket.on(ch, (p) => handle(ch, p)));
     return () => socket.close();
   }, [handle]);
@@ -415,6 +446,28 @@ function App() {
     if (next) rushTimer.current = setTimeout(() => setRush(false), (cfgRef.current.surge_duration || 45) * 1000);
   }, [rush]);
 
+  const submitAsk = useCallback((question) => {
+    const q = (question || "").trim();
+    if (!q) return;
+    const localId = "q-" + Date.now().toString(36);
+    setAsk((a) => ({ ...a, pending: true, answer: null, id: localId }));
+    if (DEMO) {
+      // No backend in preview: synthesise a plausible answer after a beat.
+      setTimeout(() => handle("operator_answer", {
+        question_id: localId,
+        answer: "(demo) Based on the current crowd context, keep the gateline restricted, deploy staff to the busier platform, and make a PA advising Overton/Jones as alternatives. Watch the occupancy trend over the next few windows.",
+      }), 1400);
+      return;
+    }
+    fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.question_id) setAsk((a) => ({ ...a, id: d.question_id }));
+        else setAsk((a) => ({ ...a, pending: false, answer: "Error: " + (d.error || "request failed") }));
+      })
+      .catch(() => setAsk((a) => ({ ...a, pending: false, answer: "Error submitting question." })));
+  }, [handle]);
+
   const trainList = Array.from(trains.current.values());
 
   return (
@@ -425,6 +478,9 @@ function App() {
         <span className={`status ${connected ? "ok" : "bad"}`}>{connected ? (DEMO ? "demo" : "live") : "connecting…"}</span>
         <div className="spacer"></div>
         <div className="controls">
+          <button className="secondary" onClick={() => setAsk((a) => ({ ...a, open: true }))}>
+            Ask AI
+          </button>
           <button className={rush ? "" : "secondary"}
             style={{ background: rush ? "var(--red)" : "var(--green)", borderColor: "transparent", minWidth: 168 }}
             onClick={toggleRush}>
@@ -432,6 +488,10 @@ function App() {
           </button>
         </div>
       </header>
+
+      {ask.open && (
+        <AskModal ask={ask} setAsk={setAsk} submitAsk={submitAsk} />
+      )}
 
       <main>
         <AIFeed items={ai} />

@@ -56,9 +56,11 @@ threshold_trig AS (
     pct,
     event_time
   FROM occ_lag
-  -- Fire on stepping UP into BUSY (early warning), HIGH, or CRITICAL — one call
-  -- per step up, never while the band is unchanged.
-  WHERE band >= 1 AND (prev_band IS NULL OR band > prev_band)
+  -- Fire on stepping UP into BUSY (early warning), HIGH, or CRITICAL, AND keep
+  -- advising every window while HIGH/CRITICAL (band >= 2) so the demo stays lively
+  -- during a surge. A steady BUSY plateau still fires only on the step up.
+  WHERE (band >= 1 AND (prev_band IS NULL OR band > prev_band))
+     OR band >= 2
 ),
 unified AS (
   SELECT `trigger`, metric, actual, forecast, occupancy, pct, event_time FROM anomaly_trig

@@ -23,7 +23,7 @@ if os.environ.get("SOCKETIO_ASYNC_MODE") == "eventlet":  # pragma: no cover
 from backend.app import create_app  # noqa: E402
 from backend.config import Config  # noqa: E402
 from backend.consumers import ConsumerManager  # noqa: E402
-from backend.producer import DemoControlProducer  # noqa: E402
+from backend.producer import DemoControlProducer, QuestionProducer  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,8 +42,10 @@ def main() -> int:
         return 1
 
     demo_producer = DemoControlProducer.from_config(config)
+    question_producer = QuestionProducer.from_config(config)
     app, socketio = create_app(
         demo_producer=demo_producer,
+        question_producer=question_producer,
         config=config,
         async_mode=config.async_mode,
     )

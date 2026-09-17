@@ -15,34 +15,21 @@ import pathlib
 
 from dotenv import load_dotenv
 
-# --- Shared domain constants: from the environment (.env) -----------------
-# Every configurable value lives in the root .env (documented in .env_example);
-# Terraform holds its own copy in terraform/vars.tf and writes the resolved
-# values back into .env on apply. The fallbacks here keep imports working for
-# tests / previews before a .env exists. No values live in a separate data file.
-load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env")
-
-_DEFAULTS: dict[str, str] = {
-    "STATION_NAME": "Tilley Station",
-    "STATION_CAPACITY": "1200",
-    "AGG_WINDOW_SECONDS": "15",
-    "PCT_LOW": "0.70",
-    "PCT_HIGH": "0.85",
-    "PCT_CRITICAL": "0.95",
-}
-
-
-def _cfg(key: str) -> str:
-    return os.environ.get(key, _DEFAULTS[key])
-
+# --- Shared domain constants: from the environment only -------------------
+# NOTHING is hard-coded here. Values come from the root .env (copied from
+# .env_example and written by `terraform apply` from terraform/vars.tf); in
+# Docker they arrive via env_file so os.environ is already populated. If a value
+# is missing the app fails loudly (KeyError) rather than using a silent default.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+load_dotenv(_REPO_ROOT / ".env")
 
 _CONFIG = {
-    "station_name": _cfg("STATION_NAME"),
-    "station_capacity": int(_cfg("STATION_CAPACITY")),
-    "agg_window_seconds": int(_cfg("AGG_WINDOW_SECONDS")),
-    "pct_low": float(_cfg("PCT_LOW")),
-    "pct_high": float(_cfg("PCT_HIGH")),
-    "pct_critical": float(_cfg("PCT_CRITICAL")),
+    "station_name": os.environ["STATION_NAME"],
+    "station_capacity": int(os.environ["STATION_CAPACITY"]),
+    "agg_window_seconds": int(os.environ["AGG_WINDOW_SECONDS"]),
+    "pct_low": float(os.environ["PCT_LOW"]),
+    "pct_high": float(os.environ["PCT_HIGH"]),
+    "pct_critical": float(os.environ["PCT_CRITICAL"]),
 }
 
 # --- station_data (one modelled station) -------------------------------

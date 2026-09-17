@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "operator_questions",
+  "namespace": "tilley",
+  "doc": "An ad-hoc question the duty supervisor submits from the dashboard (backend -> Kafka). Flink enriches it with the latest station_metrics + station_anomalies and calls Bedrock; the answer lands on operator_answers.",
+  "fields": [
+    { "name": "question_id", "type": "string", "doc": "UUID correlating the answer back to the asking browser." },
+    { "name": "question", "type": "string", "doc": "The supervisor's free-text question." },
+    { "name": "station_name", "type": "string", "doc": "Join key to the latest metrics/anomaly for this station." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

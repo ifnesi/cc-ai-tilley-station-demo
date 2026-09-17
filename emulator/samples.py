@@ -118,6 +118,18 @@ def sample_record(topic: str) -> dict:
             ),
             "event_time": t,
         },
+        "operator_questions": lambda: {
+            "question_id": "q-abc123",
+            "question": "Should I open the second exit for the westbound crowd?",
+            "station_name": ref.STATION_NAME,
+            "event_time": t,
+        },
+        "operator_answers": lambda: {
+            "question_id": "q-abc123",
+            "question": "Should I open the second exit for the westbound crowd?",
+            "answer": "Yes — with occupancy at 88% and a foot-entry spike, open the second exit and route westbound arrivals to it; keep the gateline restricted and watch the westbound platform.",
+            "event_time": t,
+        },
     }
     return builders[topic]()
 

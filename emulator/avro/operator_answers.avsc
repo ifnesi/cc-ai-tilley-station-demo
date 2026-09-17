@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "operator_answers",
+  "namespace": "tilley",
+  "doc": "AI answer to an operator question — ML_PREDICT on Bedrock, prompted with the question plus the latest station_metrics/station_anomalies context (Flink 07). The backend routes it back to the asking browser by question_id.",
+  "fields": [
+    { "name": "question_id", "type": "string", "doc": "Correlates to the operator_questions record." },
+    { "name": "question", "type": "string", "doc": "Echoed back for display." },
+    { "name": "answer", "type": "string", "doc": "The AI's plain-text answer." },
+    { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
+  ]
+}

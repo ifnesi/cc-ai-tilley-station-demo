@@ -14,6 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_env() -> None:
+    # Load the root .env (copied from .env_example). Values missing here make
+    # from_env fail loudly rather than fall back to a silent default.
     load_dotenv(REPO_ROOT / ".env")
 
 
@@ -69,32 +71,34 @@ class EmulatorConfig:
 
     @classmethod
     def from_env(cls) -> "EmulatorConfig":
+        # load_env() loads .env + .env_example, so every knob below is present in
+        # the environment — no hard-coded fallbacks here.
         load_env()
         e = os.environ
         return cls(
-            bootstrap_servers=e.get("BOOTSTRAP_SERVERS", ""),
-            kafka_api_key=e.get("KAFKA_API_KEY", ""),
-            kafka_api_secret=e.get("KAFKA_API_SECRET", ""),
-            schema_registry_url=e.get("SCHEMA_REGISTRY_URL", ""),
-            schema_registry_api_key=e.get("SCHEMA_REGISTRY_API_KEY", ""),
-            schema_registry_api_secret=e.get("SCHEMA_REGISTRY_API_SECRET", ""),
+            bootstrap_servers=e["BOOTSTRAP_SERVERS"],
+            kafka_api_key=e["KAFKA_API_KEY"],
+            kafka_api_secret=e["KAFKA_API_SECRET"],
+            schema_registry_url=e["SCHEMA_REGISTRY_URL"],
+            schema_registry_api_key=e["SCHEMA_REGISTRY_API_KEY"],
+            schema_registry_api_secret=e["SCHEMA_REGISTRY_API_SECRET"],
             # station_name/capacity come from reference.py (which reads .env).
-            foot_min=int(e.get("FOOT_MIN", "1")),
-            foot_max=int(e.get("FOOT_MAX", "40")),
-            train_min=int(e.get("TRAIN_MIN", "10")),
-            train_max=int(e.get("TRAIN_MAX", "40")),
-            dwell_min=int(e.get("DWELL_MIN", "8")),
-            dwell_max=int(e.get("DWELL_MAX", "20")),
-            board_fraction=float(e.get("BOARD_FRACTION", "0.35")),
-            surge_factor=float(e.get("SURGE_FACTOR", "5")),
-            surge_duration=int(e.get("SURGE_DURATION", "45")),
-            auto_surge_after=int(e.get("AUTO_SURGE_AFTER", "0")),
+            foot_min=int(e["FOOT_MIN"]),
+            foot_max=int(e["FOOT_MAX"]),
+            train_min=int(e["TRAIN_MIN"]),
+            train_max=int(e["TRAIN_MAX"]),
+            dwell_min=int(e["DWELL_MIN"]),
+            dwell_max=int(e["DWELL_MAX"]),
+            board_fraction=float(e["BOARD_FRACTION"]),
+            surge_factor=float(e["SURGE_FACTOR"]),
+            surge_duration=int(e["SURGE_DURATION"]),
+            auto_surge_after=int(e["AUTO_SURGE_AFTER"]),
             # Occupancy the station starts at / returns to on RESET, as a fraction
-            # of capacity. Clamped to [0, 1]; default 0.45 (a healthy mid-band).
+            # of capacity. Clamped to [0, 1].
             initial_occupancy_fraction=min(
-                1.0, max(0.0, float(e.get("INITIAL_OCCUPANCY_FRACTION", "0.45")))
+                1.0, max(0.0, float(e["INITIAL_OCCUPANCY_FRACTION"]))
             ),
-            consumer_group=e.get("CONSUMER_GROUP", "tilley-emulator"),
+            consumer_group=e["CONSUMER_GROUP"],
         )
 
     # --- confluent-kafka client configs -----------------------------------

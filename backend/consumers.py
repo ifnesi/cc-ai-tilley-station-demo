@@ -32,6 +32,7 @@ TOPIC_CHANNELS: dict[str, str] = {
     "signal_state": "signal",
     "gateline_state": "gateline",
     "station_ai_suggestions": "ai_suggestion",
+    "operator_answers": "operator_answer",
 }
 
 RAW_EVENT_TOPICS: frozenset[str] = frozenset(

@@ -33,6 +33,7 @@ def test_topic_inventory_matches_spec():
         "passengers_flow",
         "station_occupancy",
         "demo_control",
+        "operator_questions",
     }
     assert set(DERIVED_TOPICS) == {
         "station_metrics",
@@ -40,6 +41,7 @@ def test_topic_inventory_matches_spec():
         "signal_state",
         "gateline_state",
         "station_ai_suggestions",
+        "operator_answers",
     }
 
 

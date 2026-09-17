@@ -15,7 +15,8 @@ FRONTEND_DIR = REPO_ROOT / "frontend"
 
 
 def load_env() -> None:
-    """Load the repo-root .env if present (real secrets are git-ignored)."""
+    """Load the root .env (copied from .env_example). A missing value makes
+    from_env fail loudly rather than fall back to a silent default."""
     load_dotenv(REPO_ROOT / ".env")
 
 
@@ -54,22 +55,24 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
+        # load_env() loads .env + .env_example, so every key below is present —
+        # no hard-coded fallbacks here.
         load_env()
         e = os.environ
         return cls(
-            bootstrap_servers=e.get("BOOTSTRAP_SERVERS", ""),
-            kafka_api_key=e.get("KAFKA_API_KEY", ""),
-            kafka_api_secret=e.get("KAFKA_API_SECRET", ""),
-            schema_registry_url=e.get("SCHEMA_REGISTRY_URL", ""),
-            schema_registry_api_key=e.get("SCHEMA_REGISTRY_API_KEY", ""),
-            schema_registry_api_secret=e.get("SCHEMA_REGISTRY_API_SECRET", ""),
-            consumer_group=e.get("CONSUMER_GROUP", "tilley-demo-backend"),
+            bootstrap_servers=e["BOOTSTRAP_SERVERS"],
+            kafka_api_key=e["KAFKA_API_KEY"],
+            kafka_api_secret=e["KAFKA_API_SECRET"],
+            schema_registry_url=e["SCHEMA_REGISTRY_URL"],
+            schema_registry_api_key=e["SCHEMA_REGISTRY_API_KEY"],
+            schema_registry_api_secret=e["SCHEMA_REGISTRY_API_SECRET"],
+            consumer_group=e["CONSUMER_GROUP"],
             # agg_window_seconds comes from reference.py (which reads it from .env)
-            host=e.get("BACKEND_HOST", "0.0.0.0"),
-            port=int(e.get("BACKEND_PORT", "8080")),
-            async_mode=e.get("SOCKETIO_ASYNC_MODE", "threading"),
-            surge_factor=float(e.get("SURGE_FACTOR", "5")),
-            surge_duration=int(e.get("SURGE_DURATION", "45")),
+            host=e["BACKEND_HOST"],
+            port=int(e["BACKEND_PORT"]),
+            async_mode=e["SOCKETIO_ASYNC_MODE"],
+            surge_factor=float(e["SURGE_FACTOR"]),
+            surge_duration=int(e["SURGE_DURATION"]),
         )
 
     # --- confluent-kafka client configs -----------------------------------

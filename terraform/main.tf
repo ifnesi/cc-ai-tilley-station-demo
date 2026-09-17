@@ -19,15 +19,18 @@ locals {
     "signal_state",
     "gateline_state",
     "station_ai_suggestions",
+    "operator_questions",
+    "operator_answers",
   ]
 
-  # Raw display topics we window / control over — set a zero-lag watermark so
-  # windows fire promptly and the control loops react within a few seconds.
+  # Raw topics we window / join over — set a zero-lag watermark so windows fire
+  # promptly and the operator-question temporal join has an event-time attribute.
   raw_display_topics = [
     "passengers_flow",
     "train_in_station",
     "train_in_transit",
     "station_occupancy",
+    "operator_questions",
   ]
 
   # Bedrock invoke endpoint (region + model id). Reused by the connection and by
@@ -53,11 +56,13 @@ locals {
   # See: docs.confluent.io/cloud/current/flink/reference/statements/create-model.html#model-versioning
   model_version_hash = substr(sha1(join("|", [
     filesha1("${path.module}/sql/05_ai_model.sql"),
+    filesha1("${path.module}/sql/05b_qa_model.sql"),
     local.bedrock_endpoint,
     tostring(var.ai_max_tokens),
     tostring(var.ai_temperature),
   ])), 0, 8)
-  model_name = "${var.ai_model_name}_${local.model_version_hash}"
+  model_name    = "${var.ai_model_name}_${local.model_version_hash}"
+  qa_model_name = "${var.ai_qa_model_name}_${local.model_version_hash}"
 
   # Constants injected into the Flink SQL templates. Domain values are Terraform
   # variables (vars.tf) — Terraform's own copy. On apply, write_env.sh writes the
@@ -73,6 +78,7 @@ locals {
     min_training_size  = var.min_training_size
     bedrock_connection = var.bedrock_connection_name
     model_name         = local.model_name
+    qa_model_name      = local.qa_model_name
     ai_max_tokens      = var.ai_max_tokens
     ai_temperature     = var.ai_temperature
   }
@@ -600,6 +606,64 @@ resource "confluent_flink_statement" "ai_suggestions" {
   depends_on = [
     confluent_flink_statement.ai_model,
     confluent_flink_statement.anomalies,
+    confluent_flink_statement.metrics_read_uncommitted,
+    confluent_flink_statement.anomalies_read_uncommitted,
+  ]
+}
+
+# ---------------------------------------------------------------------------
+# 5b) Second Bedrock model for the operator Ask-AI feature (conversational).
+# ---------------------------------------------------------------------------
+resource "confluent_flink_statement" "ai_qa_model" {
+  organization {
+    id = data.confluent_organization.org.id
+  }
+  environment {
+    id = confluent_environment.env.id
+  }
+  compute_pool {
+    id = confluent_flink_compute_pool.pool.id
+  }
+  principal {
+    id = confluent_service_account.app_manager.id
+  }
+  statement     = templatefile("${path.module}/sql/05b_qa_model.sql", local.sql_vars)
+  properties    = local.flink_statement_properties
+  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  credentials {
+    key    = confluent_api_key.flink.id
+    secret = confluent_api_key.flink.secret
+  }
+  depends_on = [confluent_flink_connection.bedrock]
+}
+
+# ---------------------------------------------------------------------------
+# 7) Operator Ask-AI: operator_questions + latest metrics/anomalies (temporal
+#    join) -> Bedrock -> operator_answers.
+# ---------------------------------------------------------------------------
+resource "confluent_flink_statement" "operator_qa" {
+  organization {
+    id = data.confluent_organization.org.id
+  }
+  environment {
+    id = confluent_environment.env.id
+  }
+  compute_pool {
+    id = confluent_flink_compute_pool.pool.id
+  }
+  principal {
+    id = confluent_service_account.app_manager.id
+  }
+  statement     = templatefile("${path.module}/sql/07_operator_qa.sql", local.sql_vars)
+  properties    = local.flink_statement_properties_dml
+  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  credentials {
+    key    = confluent_api_key.flink.id
+    secret = confluent_api_key.flink.secret
+  }
+  depends_on = [
+    confluent_flink_statement.ai_qa_model,
+    confluent_flink_statement.watermark,
     confluent_flink_statement.metrics_read_uncommitted,
     confluent_flink_statement.anomalies_read_uncommitted,
   ]

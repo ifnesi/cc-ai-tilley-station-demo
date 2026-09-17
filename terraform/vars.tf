@@ -148,6 +148,12 @@ variable "ai_model_name" {
   default = "ops_advisor"
 }
 
+variable "ai_qa_model_name" {
+  type        = string
+  default     = "ops_qa"
+  description = "Second Bedrock model for the operator Ask-AI feature (conversational, not the 4-line alert format)."
+}
+
 variable "ai_max_tokens" {
   type        = number
   default     = 512
@@ -180,8 +186,8 @@ variable "station_capacity" {
 
 variable "agg_window_seconds" {
   type        = number
-  default     = 15
-  description = "Tumbling window size for the Flink crowd metrics."
+  default     = 10
+  description = "Tumbling window size for the Flink crowd metrics. Smaller = livelier demo (metrics/anomalies/AI update faster)."
 }
 
 variable "pct_low" {
@@ -203,8 +209,8 @@ variable "pct_critical" {
 
 variable "min_training_size" {
   type        = number
-  default     = 30
-  description = "ML_DETECT_ANOMALIES minTrainingSize — model is trained by showtime"
+  default     = 12
+  description = "ML_DETECT_ANOMALIES minTrainingSize — smaller so the anomaly model warms up in a couple of minutes for a live demo (12 windows x agg_window_seconds)."
 }
 
 variable "write_env_file" {
