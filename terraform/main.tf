@@ -269,7 +269,6 @@ resource "terraform_data" "write_env" {
     confluent_kafka_cluster.kafka.bootstrap_endpoint,
     confluent_api_key.clients_kafka.id,
     confluent_api_key.sr.id,
-    confluent_api_key.mcp_reader.id,
     data.confluent_schema_registry_cluster.sr.rest_endpoint,
   ]
 
@@ -290,9 +289,10 @@ resource "terraform_data" "write_env" {
       EV_PCT_LOW            = tostring(var.pct_low)
       EV_PCT_HIGH           = tostring(var.pct_high)
       EV_PCT_CRITICAL       = tostring(var.pct_critical)
-      # Managed MCP for Claude Code (.mcp.json reads CC_MCP_URL + CC_MCP_AUTH).
-      EV_CC_MCP_URL  = local.mcp_url
-      EV_CC_MCP_AUTH = base64encode("${confluent_api_key.mcp_reader.id}:${confluent_api_key.mcp_reader.secret}")
+      # Managed MCP endpoint for Claude Code (.mcp.json reads CC_MCP_URL).
+      # CC_MCP_AUTH is a Global API key the operator creates by hand (see README);
+      # Terraform can't mint a Global key, so it is not written here.
+      EV_CC_MCP_URL = local.mcp_url
     }
   }
 }
@@ -363,9 +363,12 @@ locals {
   )
 }
 
-# Read-only principal the managed MCP server authenticates as. Terraform also
-# mints its GLOBAL API key (confluent_api_key.mcp_reader) and writes the
-# base64-encoded CC_MCP_AUTH into .env — no manual key creation needed.
+# Read-only principal the managed MCP server authenticates as. The REGIONAL
+# managed-MCP endpoint only accepts a GLOBAL API key (or a Flink key) — NOT a
+# Cloud API key, which is the only kind the Terraform provider can mint. So the
+# operator creates a Global API key for THIS service account in the Console
+# (Cloud API keys → Add key → Global), and exports it base64-encoded as
+# CC_MCP_AUTH. The key inherits this SA's read-only RBAC below.
 resource "confluent_service_account" "mcp_reader" {
   display_name = "mcp-reader-${random_id.id.hex}"
   description  = "Read-only principal for the Confluent Cloud managed MCP / RTCE endpoint"
@@ -393,24 +396,10 @@ resource "confluent_role_binding" "mcp_data_discovery" {
   crn_pattern = confluent_environment.env.resource_name
 }
 
-# GLOBAL (Cloud) API key owned by mcp-reader — no `managed_resource` block, which
-# is what makes it a Cloud API key (vs. a cluster/SR-scoped one). The managed MCP
-# endpoint authenticates with HTTP Basic base64("id:secret"); write_env.sh encodes
-# it and writes CC_MCP_AUTH into .env, so nothing is created by hand.
-resource "confluent_api_key" "mcp_reader" {
-  display_name = "mcp-reader-${random_id.id.hex}"
-  description  = "Tilley demo — managed MCP (RTCE) read-only Cloud API key"
-  owner {
-    id          = confluent_service_account.mcp_reader.id
-    api_version = confluent_service_account.mcp_reader.api_version
-    kind        = confluent_service_account.mcp_reader.kind
-  }
-  depends_on = [
-    confluent_role_binding.mcp_read_topics,
-    confluent_role_binding.mcp_read_subjects,
-    confluent_role_binding.mcp_data_discovery,
-  ]
-}
+# NOTE: no confluent_api_key for mcp-reader here on purpose. The regional managed
+# MCP server rejects Cloud API keys (HTTP 404), and the provider cannot create a
+# Global API key — so it is created by hand in the Console (see README) and
+# exported as CC_MCP_AUTH.
 
 # One RTCE registration per topic — makes each available to the MCP context
 # engine. Requires the registered value schema (above) and an RTCE-supported

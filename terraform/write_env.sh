@@ -67,7 +67,7 @@ update_key AGG_WINDOW_SECONDS "$(val AGG_WINDOW_SECONDS agg_window_seconds)"
 update_key PCT_LOW            "$(val PCT_LOW pct_low)"
 update_key PCT_HIGH           "$(val PCT_HIGH pct_high)"
 update_key PCT_CRITICAL       "$(val PCT_CRITICAL pct_critical)"
-# Managed MCP for Claude Code (RTCE context-engine): endpoint + Basic-auth token.
+# Managed MCP endpoint for Claude Code (RTCE context-engine). CC_MCP_AUTH is a
+# Global API key created by hand (see README); Terraform can't mint it.
 update_key CC_MCP_URL         "$(val CC_MCP_URL mcp_url)"
-update_key CC_MCP_AUTH        "$(val CC_MCP_AUTH mcp_auth)"
 echo "Done. Each key updated in place; the file layout is preserved."
