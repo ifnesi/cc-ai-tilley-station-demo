@@ -64,6 +64,17 @@ output "flink_api_secret" {
   sensitive = true
 }
 
+# --- managed MCP / RTCE (Claude Code) ---------------------------------------
+output "mcp_url" {
+  description = "Regional, cluster-scoped managed MCP endpoint (written to .env as CC_MCP_URL; referenced by .mcp.json)."
+  value       = local.mcp_url
+}
+
+output "mcp_reader_service_account" {
+  description = "Create a GLOBAL Cloud API key owned by THIS service account, then export CC_MCP_AUTH=base64('<key>:<secret>')."
+  value       = confluent_service_account.mcp_reader.id
+}
+
 # --- domain constants -> .env (so the Python apps match Flink) --------------
 output "station_name" { value = var.station_name }
 output "station_capacity" { value = var.station_capacity }

@@ -67,4 +67,6 @@ update_key AGG_WINDOW_SECONDS "$(val AGG_WINDOW_SECONDS agg_window_seconds)"
 update_key PCT_LOW            "$(val PCT_LOW pct_low)"
 update_key PCT_HIGH           "$(val PCT_HIGH pct_high)"
 update_key PCT_CRITICAL       "$(val PCT_CRITICAL pct_critical)"
+# Managed MCP endpoint for Claude Code (RTCE context-engine).
+update_key CC_MCP_URL         "$(val CC_MCP_URL mcp_url)"
 echo "Done. Each key updated in place; the file layout is preserved."

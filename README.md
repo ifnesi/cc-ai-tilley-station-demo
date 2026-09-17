@@ -236,6 +236,42 @@ cd terraform && terraform destroy
 
 Confluent CFUs and the cluster cost money, always destroy after you're done.
 
+## Ask the live data from Claude Code (RTCE + managed MCP)
+
+`terraform apply` also enables Confluent's **Real-Time Context Engine (RTCE)** on
+**every topic** in this demo (`confluent_rtce_topic`, one per topic), so the data
+is queryable through Confluent Cloud's **managed MCP server** — and Claude Code
+can connect to it and ask questions about the live station data.
+
+The repo-root **`.mcp.json`** declares the server (`cc-managed-mcp`, an HTTP MCP)
+and resolves from two env vars:
+
+```jsonc
+"cc-managed-mcp": {
+  "type": "http",
+  "url": "${CC_MCP_URL}",                         // regional, cluster-scoped endpoint
+  "headers": { "Authorization": "Basic ${CC_MCP_AUTH}" }
+}
+```
+
+- **`CC_MCP_URL`** — Terraform builds it and writes it into `.env`
+  (`https://mcp.<region>.<cloud>.confluent.cloud/mcp/v1/context-engine/organizations/<org>/environments/<env>/kafka-clusters/<lkc>`).
+- **`CC_MCP_AUTH`** — you set this yourself: create a **Global** Cloud API key
+  (Console → Cloud API keys → Add key → *Global*) owned by the **`mcp-reader`**
+  service account Terraform created (`terraform output mcp_reader_service_account`),
+  so it inherits the read-only RBAC.
+
+Then launch Claude Code from the repo root:
+
+```bash
+set -a; source .env; set +a          # sets CC_MCP_URL
+export CC_MCP_AUTH="$(printf '%s:%s' <GLOBAL_KEY> <GLOBAL_SECRET> | base64)"
+claude
+```
+
+Approve `cc-managed-mcp` on first run, then ask, e.g.:
+> *"Using cc-managed-mcp, list the topics and summarise the latest station_metrics and station_anomalies."*
+
 ## Running without the emulator (optional)
 
 `tools/mockfeed.py` publishes synthetic Avro to every topic (a scripted surge

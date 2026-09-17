@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cc-managed-mcp": {
+      "type": "http",
+      "url": "${CC_MCP_URL}",
+      "headers": {
+        "Authorization": "Basic ${CC_MCP_AUTH}"
+      }
+    }
+  }
+}

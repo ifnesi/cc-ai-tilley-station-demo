@@ -289,6 +289,8 @@ resource "terraform_data" "write_env" {
       EV_PCT_LOW            = tostring(var.pct_low)
       EV_PCT_HIGH           = tostring(var.pct_high)
       EV_PCT_CRITICAL       = tostring(var.pct_critical)
+      # Managed MCP endpoint for Claude Code (.mcp.json reads CC_MCP_URL).
+      EV_CC_MCP_URL = local.mcp_url
     }
   }
 }
@@ -337,6 +339,80 @@ resource "confluent_schema" "value" {
     prevent_destroy = false
   }
   depends_on = [confluent_kafka_topic.topic]
+}
+
+# ---------------------------------------------------------------------------
+# Real-Time Context Engine (RTCE) + managed MCP for Claude Code
+# ---------------------------------------------------------------------------
+# RTCE exposes each topic to Confluent's managed MCP "context-engine" endpoint,
+# so an AI agent (Claude Code) can ask questions about the live data over MCP.
+# Enabled on EVERY topic in this demo (each has a registered schema above).
+# The managed MCP endpoint is regional + cluster-scoped:
+#   https://mcp.<region>.<cloud>.confluent.cloud/mcp/v1/context-engine/
+#     organizations/<org>/environments/<env>/kafka-clusters/<lkc>
+locals {
+  mcp_url = format(
+    "https://mcp.%s.%s.confluent.cloud/mcp/v1/context-engine/organizations/%s/environments/%s/kafka-clusters/%s",
+    var.cc_cloud_region,
+    lower(var.cc_cloud_provider),
+    data.confluent_organization.org.id,
+    confluent_environment.env.id,
+    confluent_kafka_cluster.kafka.id,
+  )
+}
+
+# Read-only principal the managed MCP server authenticates as. The operator
+# creates a GLOBAL API key for THIS service account (console/CLI) and exports it
+# base64-encoded as CC_MCP_AUTH — Terraform does not render that key.
+resource "confluent_service_account" "mcp_reader" {
+  display_name = "mcp-reader-${random_id.id.hex}"
+  description  = "Read-only principal for the Confluent Cloud managed MCP / RTCE endpoint"
+  lifecycle {
+    prevent_destroy = false
+  }
+}
+
+# Read-only on every topic + subject, plus environment discovery.
+resource "confluent_role_binding" "mcp_read_topics" {
+  principal   = "User:${confluent_service_account.mcp_reader.id}"
+  role_name   = "DeveloperRead"
+  crn_pattern = "${confluent_kafka_cluster.kafka.rbac_crn}/kafka=${confluent_kafka_cluster.kafka.id}/topic=*"
+}
+
+resource "confluent_role_binding" "mcp_read_subjects" {
+  principal   = "User:${confluent_service_account.mcp_reader.id}"
+  role_name   = "DeveloperRead"
+  crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=*"
+}
+
+resource "confluent_role_binding" "mcp_data_discovery" {
+  principal   = "User:${confluent_service_account.mcp_reader.id}"
+  role_name   = "DataDiscovery"
+  crn_pattern = confluent_environment.env.resource_name
+}
+
+# One RTCE registration per topic — makes each available to the MCP context
+# engine. Requires the registered value schema (above) and an RTCE-supported
+# cluster/region. No credentials block: it uses the provider's Cloud API key.
+resource "confluent_rtce_topic" "topic" {
+  for_each = toset(local.topics)
+
+  cloud       = var.cc_cloud_provider
+  region      = var.cc_cloud_region
+  topic_name  = each.key
+  description = "Tilley Station demo — ${each.key}"
+
+  environment {
+    id = confluent_environment.env.id
+  }
+  kafka_cluster {
+    id = confluent_kafka_cluster.kafka.id
+  }
+
+  depends_on = [confluent_schema.value]
+  lifecycle {
+    prevent_destroy = false
+  }
 }
 
 # ---------------------------------------------------------------------------
