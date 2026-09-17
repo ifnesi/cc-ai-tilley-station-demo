@@ -306,28 +306,38 @@ function parseSuggestion(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Ask-AI modal — operator question -> Kafka -> Flink (+ live context) -> Bedrock
+// Ask-AI tab — full Q&A history + a bottom input.
+// Each question -> Kafka -> Flink (+ live context) -> Bedrock -> answer.
 // ---------------------------------------------------------------------------
-function AskModal({ ask, setAsk, submitAsk }) {
+function AskPanel({ history, submitAsk }) {
   const [text, setText] = useState("");
-  const close = () => setAsk({ open: false, q: "", answer: null, pending: false, id: null });
+  const bottomRef = useRef(null);
+  useEffect(() => { if (bottomRef.current) bottomRef.current.scrollIntoView({ behavior: "smooth" }); }, [history]);
+  const send = () => { const q = text.trim(); if (!q) return; submitAsk(q); setText(""); };
   return (
-    <div className="modal-overlay" onClick={close}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Ask the AI supervisor</h2>
-        <p className="modal-sub">Your question is merged with the live station metrics + anomalies in Flink, then answered by Bedrock.</p>
-        <textarea className="modal-input" rows="3" autoFocus
-          placeholder="e.g. The westbound platform is filling fast — what should I do?"
+    <div className="ask-panel">
+      <div className="ask-history">
+        {history.length === 0 && (
+          <div className="empty">No questions yet. Ask the AI supervisor anything about the current situation — each question is enriched with the live station context and answered by Bedrock.</div>
+        )}
+        {history.map((e) => (
+          <div className="ask-turn" key={e.id}>
+            <div className="ask-q"><span className="ask-time">{hhmmss(e.ts)}</span><b>You:</b> {e.question}</div>
+            <div className="ask-a">
+              {e.pending
+                ? <span className="muted">Consulting the AI with live context…</span>
+                : <span><span className="ask-time">{hhmmss(e.answerTs || e.ts)}</span><b>AI:</b> {e.answer}</span>}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef}></div>
+      </div>
+      <div className="ask-input-bar">
+        <textarea rows="2"
+          placeholder="Ask the AI supervisor…  (Enter to send, Shift+Enter for a new line)"
           value={text} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitAsk(text); }} />
-        <div className="modal-actions">
-          <button className="secondary" onClick={close}>Close</button>
-          <button onClick={() => submitAsk(text)} disabled={ask.pending || !text.trim()}>
-            {ask.pending ? "Asking…" : "Ask"}
-          </button>
-        </div>
-        {ask.pending && <div className="modal-answer muted">Consulting the AI with live context…</div>}
-        {ask.answer && <div className="modal-answer"><b>AI:</b> {ask.answer}</div>}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
+        <button onClick={send} disabled={!text.trim()}>Send</button>
       </div>
     </div>
   );
@@ -348,7 +358,8 @@ function App() {
   const [ai, setAi] = useState([]);
   const [rush, setRush] = useState(false);
   const [now, setNow] = useState(performance.now());
-  const [ask, setAsk] = useState({ open: false, q: "", answer: null, pending: false, id: null });
+  const [tab, setTab] = useState("dashboard");
+  const [askHistory, setAskHistory] = useState([]);
 
   const trains = useRef(new Map());
   const rushTimer = useRef(null);
@@ -379,7 +390,7 @@ function App() {
       const parsed = parseSuggestion(p.suggestion);
       setAi((a) => [{ ts: Date.now(), trigger: p.trigger, ...parsed }, ...a].slice(0, 12));
     } else if (channel === "operator_answer") {
-      setAsk((a) => (a.id && p.question_id === a.id) ? { ...a, answer: p.answer, pending: false } : a);
+      setAskHistory((h) => h.map((e) => e.id === p.question_id ? { ...e, answer: p.answer, pending: false, answerTs: Date.now() } : e));
     } else if (channel === "raw_event") {
       const d = p.data || {};
       if (p.event_type === "passengers_flow") {
@@ -465,8 +476,10 @@ function App() {
   const submitAsk = useCallback((question) => {
     const q = (question || "").trim();
     if (!q) return;
-    const localId = "q-" + Date.now().toString(36);
-    setAsk((a) => ({ ...a, pending: true, answer: null, id: localId }));
+    const localId = "q-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    // Append a pending turn to the history; the answer fills in via operator_answer.
+    setAskHistory((h) => [...h, { id: localId, ts: Date.now(), question: q, answer: null, pending: true }]);
+    const patch = (fn) => setAskHistory((h) => h.map((e) => e.id === localId ? fn(e) : e));
     if (DEMO) {
       // No backend in preview: synthesise a plausible answer after a beat.
       setTimeout(() => handle("operator_answer", {
@@ -478,10 +491,11 @@ function App() {
     fetch("/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) })
       .then((r) => r.json())
       .then((d) => {
-        if (d.question_id) setAsk((a) => ({ ...a, id: d.question_id }));
-        else setAsk((a) => ({ ...a, pending: false, answer: "Error: " + (d.error || "request failed") }));
+        // Re-key the turn to the backend's question_id so operator_answer matches.
+        if (d.question_id) patch((e) => ({ ...e, id: d.question_id }));
+        else patch((e) => ({ ...e, pending: false, answer: "Error: " + (d.error || "request failed") }));
       })
-      .catch(() => setAsk((a) => ({ ...a, pending: false, answer: "Error submitting question." })));
+      .catch(() => patch((e) => ({ ...e, pending: false, answer: "Error submitting question." })));
   }, [handle]);
 
   const trainList = Array.from(trains.current.values());
@@ -492,11 +506,14 @@ function App() {
         <span style={{ fontSize: 20 }}>🚇</span>
         <h1>Tilley Station <span className="sub">: LIVE CROWD MANAGEMENT</span></h1>
         <span className={`status ${connected ? "ok" : "bad"}`}>{connected ? (DEMO ? "demo" : "live") : "connecting…"}</span>
+        <nav className="tabs">
+          <button className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>Dashboard</button>
+          <button className={tab === "ask" ? "tab active" : "tab"} onClick={() => setTab("ask")}>
+            Ask AI{askHistory.length ? ` (${askHistory.length})` : ""}
+          </button>
+        </nav>
         <div className="spacer"></div>
         <div className="controls">
-          <button className="secondary" onClick={() => setAsk((a) => ({ ...a, open: true }))}>
-            Ask AI
-          </button>
           <button className={rush ? "" : "secondary"}
             style={{ background: rush ? "var(--red)" : "var(--green)", borderColor: "transparent", minWidth: 168 }}
             onClick={toggleRush}>
@@ -505,24 +522,24 @@ function App() {
         </div>
       </header>
 
-      {ask.open && (
-        <AskModal ask={ask} setAsk={setAsk} submitAsk={submitAsk} />
+      {tab === "dashboard" ? (
+        <main>
+          <AIFeed items={ai} />
+          <StationStrip trains={trainList} signals={signals} gateline={gateline}
+            occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} now={now} />
+          <div className="panel area-chartA">
+            <h2>Occupancy over time</h2>
+            <OccupancyChart hist={occHist} capacity={occ.capacity} />
+          </div>
+          <div className="panel area-chartB">
+            <h2>Flow in / out (per window)</h2>
+            <FlowChart hist={flowHist} />
+          </div>
+          <EventFeed items={feed} />
+        </main>
+      ) : (
+        <AskPanel history={askHistory} submitAsk={submitAsk} />
       )}
-
-      <main>
-        <AIFeed items={ai} />
-        <StationStrip trains={trainList} signals={signals} gateline={gateline}
-          occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} now={now} />
-        <div className="panel area-chartA">
-          <h2>Occupancy over time</h2>
-          <OccupancyChart hist={occHist} capacity={occ.capacity} />
-        </div>
-        <div className="panel area-chartB">
-          <h2>Flow in / out (per window)</h2>
-          <FlowChart hist={flowHist} />
-        </div>
-        <EventFeed items={feed} />
-      </main>
     </React.Fragment>
   );
 }

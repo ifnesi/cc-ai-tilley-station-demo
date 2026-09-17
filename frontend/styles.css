@@ -111,7 +111,7 @@ main {
 
 /* ---------- AI advice ---------- */
 /* Title stays put; the advice history scrolls (newest on top), ~5 lines tall. */
-.ai-scroll { max-height: 8.5em; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.ai-scroll { max-height: 14em; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .ai-card { background: var(--panel-2); border: 1px solid var(--border); border-left-width: 4px; border-radius: 8px; padding: 10px 12px; }
 .ai-card.LOW { border-left-color: var(--green); }
 .ai-card.MEDIUM { border-left-color: var(--amber); }
@@ -125,27 +125,41 @@ main {
 .ai-time { color: #6e7681; font-size: 12px; margin-left: 8px; }
 .empty { color: #6e7681; font-size: 13px; padding: 8px 0; }
 
-/* ---------- Ask-AI modal ---------- */
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.6);
-  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px;
+/* ---------- tabs ---------- */
+.tabs { display: flex; gap: 4px; margin-left: 20px; }
+.tab {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  padding: 7px 16px; border-radius: 8px; font-weight: 700; font-size: 13px;
 }
-.modal {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-  padding: 20px; width: 100%; max-width: 560px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+.tab.active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+
+/* ---------- Ask-AI tab ---------- */
+.ask-panel {
+  display: flex; flex-direction: column; gap: 12px;
+  height: calc(100vh - 66px); max-width: 900px; margin: 0 auto; padding: 16px 20px 20px;
 }
-.modal h2 { margin: 0 0 6px; font-size: 15px; color: var(--text); }
-.modal-sub { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
-.modal-input {
-  width: 100%; box-sizing: border-box; resize: vertical; font: inherit;
+.ask-history {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 16px; padding-right: 6px;
+}
+.ask-turn { display: flex; flex-direction: column; gap: 6px; }
+.ask-q {
+  align-self: flex-end; max-width: 82%;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px 12px 2px 12px;
+  padding: 10px 14px; color: var(--text);
+}
+.ask-a {
+  align-self: flex-start; max-width: 88%;
+  background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 12px 12px 12px 2px; padding: 10px 14px; color: #c9d1d9; line-height: 1.55;
+}
+.ask-q b, .ask-a b { color: var(--muted); font-weight: 700; margin-right: 4px; }
+.ask-time { color: #6e7681; font-size: 11px; margin-right: 8px; }
+.ask-a .muted { color: var(--muted); font-style: italic; }
+.ask-input-bar { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--border); padding-top: 12px; }
+.ask-input-bar textarea {
+  flex: 1; box-sizing: border-box; resize: none; font: inherit;
   background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 12px;
 }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.modal-answer {
-  margin-top: 14px; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5;
-  background: var(--panel-2); border: 1px solid var(--border); color: #c9d1d9;
-  max-height: 260px; overflow-y: auto;
-}
-.modal-answer.muted { color: var(--muted); font-style: italic; }
-.modal-answer b { color: var(--accent); }
+.ask-input-bar button { min-width: 88px; }
