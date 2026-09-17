@@ -29,6 +29,9 @@ decision support. The tube theme is just the vehicle. What it demonstrates:
 - **Ask-AI**, the supervisor can type an ad-hoc question; the backend snapshots
   the live metrics + anomalies into it, it goes onto Kafka, Flink asks Bedrock
   with that context, and the answer streams back to the browser.
+- **Real-Time Context Engine (RTCE) + managed MCP**, every topic is exposed to
+  Confluent Cloud's managed MCP server, so **Claude Code** can connect and ask
+  questions about the live station data (read-only).
 
 ## Architecture
 
@@ -45,9 +48,11 @@ flowchart LR
     CTRL["Control topics<br/>signal_state · gateline_state"]
     FLINK["Flink SQL (analytics only)<br/>windowed metrics · ML anomaly filter · AI advisor"]
     DER["Derived topics<br/>station_metrics · station_anomalies<br/>station_ai_suggestions"]
+    MCP["Managed MCP<br/>RTCE context-engine<br/>(all topics)"]
   end
 
   BR["AWS Bedrock<br/>(GenAI)"]
+  CC["Claude Code<br/>(.mcp.json)"]
 
   BR ~~~ FLINK
   EM -->|Avro events| EVT
@@ -60,6 +65,10 @@ flowchart LR
   UI -->|Rush Hour toggle| BE -->|demo_control| EM
   UI -->|Ask AI| BE -->|operator_questions| FLINK
   FLINK -->|operator_answers| BE
+  EVT --> MCP
+  CTRL --> MCP
+  DER --> MCP
+  CC <-->|MCP / read-only| MCP
 ```
 
 **The flow:** the emulator is the single source of truth for occupancy
@@ -183,10 +192,12 @@ terraform apply
 ```
 
 This creates the environment, a Standard Kafka cluster, Schema Registry, all
-topics + Avro schemas, the Flink compute pool, every Flink SQL statement, and the
-Bedrock connection + two models (the alert advisor and the Ask-AI model). It also
-writes the Kafka / Schema Registry connection details **and** the domain
-constants back into your root `.env` automatically.
+topics + Avro schemas, the Flink compute pool, every Flink SQL statement, the
+Bedrock connection + two models (the alert advisor and the Ask-AI model), and it
+enables **RTCE on every topic** plus a read-only **`mcp-reader`** principal for
+the managed MCP server. It also writes the Kafka / Schema Registry connection
+details, the domain constants, **and** the managed-MCP URL (`CC_MCP_URL`) back
+into your root `.env` automatically.
 
 ### 3. Run the demo (Docker)
 
@@ -289,7 +300,7 @@ There is no separate config data file, everything is either an **env var** or a
 
 | Where | Holds |
 |---|---|
-| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), the domain constants (`STATION_CAPACITY`, `AGG_WINDOW_SECONDS`, `PCT_LOW/HIGH/CRITICAL`, `STATION_NAME`), and the demo knobs (foot/train/surge rates, `INITIAL_OCCUPANCY_FRACTION`). Plain `KEY=VALUE` lines. |
+| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), the domain constants (`STATION_CAPACITY`, `AGG_WINDOW_SECONDS`, `PCT_LOW/HIGH/CRITICAL`, `STATION_NAME`), the demo knobs (foot/train/surge rates, `INITIAL_OCCUPANCY_FRACTION`), and the managed-MCP `CC_MCP_URL` (written by `terraform apply`; `CC_MCP_AUTH` you export yourself). Plain `KEY=VALUE` lines. |
 | **`terraform/vars.tf`** | Terraform's copy: cloud infra (region, cluster, CFUs, retention, Bedrock model) **and** the domain constants used to template the Flink SQL. |
 
 The domain constants exist in both places by design, kept in step automatically:
@@ -310,6 +321,7 @@ test suite loads `.env_example` itself so it needs no real `.env`.
 ```
 tube-station/
 ├── .env_example           # template for .env, every runtime var lives here
+├── .mcp.json              # Claude Code MCP config (managed MCP / RTCE endpoint)
 ├── Dockerfile             # one image: emulator, backend, or mock feed
 ├── docker-compose.yml     # runs the app layer
 ├── terraform/             # Confluent Cloud footprint + Flink SQL (terraform/sql/)
