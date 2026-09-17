@@ -10,6 +10,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.9/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
 </head>
 <body>
   <div id="root"></div>
@@ -29,6 +31,11 @@ const DEFAULT_CFG = {
 const DEMO = new URLSearchParams(location.search).has("demo");
 const clampArr = (a, n) => (a.length > n ? a.slice(a.length - n) : a);
 const hhmmss = (ms) => new Date(ms).toLocaleTimeString();
+// Render AI markdown -> sanitized HTML (answers can contain lists, bold, tables).
+const mdToHtml = (text) => {
+  try { return DOMPurify.sanitize(marked.parse(String(text || ""), { breaks: true })); }
+  catch (e) { return DOMPurify ? DOMPurify.sanitize(String(text || "")) : String(text || ""); }
+};
 
 function zoneColor(pct, cfg) {
   if (pct >= cfg.pct_critical) return "var(--critical)";
@@ -343,11 +350,19 @@ function AskPanel({ history, submitAsk }) {
         )}
         {history.map((e) => (
           <div className="ask-turn" key={e.id}>
-            <div className="ask-q"><span className="ask-time">{hhmmss(e.ts)}</span><b>You:</b> {e.question}</div>
+            <div className="ask-q">
+              <span className="ask-icon" title="You" role="img" aria-label="operator">🧑</span>
+              <span className="ask-time">{hhmmss(e.ts)}</span>{e.question}
+            </div>
             <div className="ask-a">
-              {e.pending
-                ? <span className="muted">Consulting the AI with live context…</span>
-                : <span><span className="ask-time">{hhmmss(e.answerTs || e.ts)}</span><b>AI:</b> {e.answer}</span>}
+              {e.pending ? (
+                <div className="ask-a-head"><span className="ask-icon" role="img" aria-label="AI">🤖</span><span className="muted">Consulting the AI with live context…</span></div>
+              ) : (
+                <div>
+                  <div className="ask-a-head"><span className="ask-icon" role="img" aria-label="AI">🤖</span><span className="ask-time">{hhmmss(e.answerTs || e.ts)}</span></div>
+                  <div className="md" dangerouslySetInnerHTML={{ __html: mdToHtml(e.answer) }}></div>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -505,7 +520,7 @@ function App() {
       // No backend in preview: synthesise a plausible answer after a beat.
       setTimeout(() => handle("operator_answer", {
         question_id: localId,
-        answer: "(demo) Based on the current crowd context, keep the gateline restricted, deploy staff to the busier platform, and make a PA advising Overton/Jones as alternatives. Watch the occupancy trend over the next few windows.",
+        answer: "**Recommended actions** _(demo)_:\n\n1. Keep the street gateline **restricted** to meter inflow.\n2. Deploy staff to the **busier platform** and the concourse.\n3. PA advising *Overton* / *Jones* as alternatives.\n\n**Watch:** occupancy trend over the next few windows.",
       }), 1400);
       return;
     }
