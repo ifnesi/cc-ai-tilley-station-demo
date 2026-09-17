@@ -355,8 +355,17 @@ function App() {
           pushFeed("train", `${d.direction_of_travel.replace("_", "-")} train departed to ${d.next_stop.replace(" Station", "")} (${d.passengers_boarding} boarded)`);
         }
       } else if (p.event_type === "train_in_station") {
-        const cur = trains.current.get(d.service_id);
-        if (cur) trains.current.set(d.service_id, { ...cur, phase: "in_station", tInStation: performance.now(), passengers: d.passengers_staying });
+        const dir = d.direction_of_travel;
+        // The platform holds one train per direction: if any earlier train on this
+        // side is still shown at the platform (its depart event was missed), push
+        // it out now so the new arrival never overlaps it.
+        for (const [sid2, tr2] of trains.current) {
+          if (sid2 !== d.service_id && tr2.dir === dir && tr2.phase === "in_station") {
+            trains.current.set(sid2, { ...tr2, phase: "depart", tDepart: performance.now() });
+          }
+        }
+        const base = trains.current.get(d.service_id) || { sid: d.service_id, dir, train_type: d.train_type };
+        trains.current.set(d.service_id, { ...base, sid: d.service_id, dir, phase: "in_station", tInStation: performance.now(), passengers: d.passengers_staying });
         pushFeed("train", `train at platform: ${d.passengers_station} alight to wait, ${d.passengers_out} exit`);
       }
     }
@@ -385,6 +394,12 @@ function App() {
       const t = performance.now();
       for (const [sid, tr] of trains.current) {
         if (tr.phase === "depart" && t - tr.tDepart > DEPART_MS + 400) trains.current.delete(sid);
+        // Safety net: a train whose depart event was missed would otherwise sit
+        // at the platform forever. Any dwell is <= ~20s, so after 35s send it on
+        // its way (it then animates out and is evicted normally).
+        else if (tr.phase === "in_station" && t - (tr.tInStation || t) > 35000) {
+          trains.current.set(sid, { ...tr, phase: "depart", tDepart: t });
+        }
       }
       setNow(t);
     }, 120);

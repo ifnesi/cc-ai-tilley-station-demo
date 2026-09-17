@@ -154,6 +154,12 @@ variable "ai_max_tokens" {
   description = "Bedrock max_tokens for the advisor (required by Anthropic models). The four-line reply is short, so this is plenty."
 }
 
+variable "ai_temperature" {
+  type        = number
+  default     = 0.7
+  description = "Bedrock sampling temperature for the advisor. Higher = more varied wording/actions (less repetition); 0 = deterministic."
+}
+
 # ---------------------------------------------------------------------------
 # Domain constants — Terraform's copy (used to template the Flink SQL). On apply,
 # write_env.sh writes the resolved values into the repo-root .env so the Python

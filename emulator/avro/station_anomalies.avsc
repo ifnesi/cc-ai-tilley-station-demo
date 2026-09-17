@@ -10,6 +10,8 @@
     { "name": "forecast", "type": "double" },
     { "name": "lower_bound", "type": "double" },
     { "name": "upper_bound", "type": "double" },
-    { "name": "is_anomaly", "type": "boolean" }
+    { "name": "is_anomaly", "type": "boolean" },
+    { "name": "occupancy", "type": "int", "default": 0, "doc": "Occupancy in the window (carried through so the AI advisor has context)." },
+    { "name": "occupancy_pct", "type": "double", "default": 0.0, "doc": "occupancy / capacity in the window." }
   ]
 }

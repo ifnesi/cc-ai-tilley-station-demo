@@ -86,6 +86,8 @@ def sample_record(topic: str) -> dict:
             "lower_bound": 40.0,
             "upper_bound": 190.0,
             "is_anomaly": True,
+            "occupancy": 1020,
+            "occupancy_pct": 1020 / ref.STATION_CAPACITY,
         },
         "signal_state": lambda: {
             "station_name": ref.STATION_NAME,

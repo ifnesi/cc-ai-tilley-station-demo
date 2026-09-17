@@ -55,6 +55,7 @@ locals {
     filesha1("${path.module}/sql/05_ai_model.sql"),
     local.bedrock_endpoint,
     tostring(var.ai_max_tokens),
+    tostring(var.ai_temperature),
   ])), 0, 8)
   model_name = "${var.ai_model_name}_${local.model_version_hash}"
 
@@ -73,6 +74,7 @@ locals {
     bedrock_connection = var.bedrock_connection_name
     model_name         = local.model_name
     ai_max_tokens      = var.ai_max_tokens
+    ai_temperature     = var.ai_temperature
   }
 
   flink_statement_properties = {
@@ -412,6 +414,32 @@ resource "confluent_flink_statement" "metrics_read_uncommitted" {
   depends_on = [confluent_schema.value, confluent_flink_compute_pool.pool]
 }
 
+# station_anomalies is written transactionally by the anomalies statement and now
+# read by the AI advisor (06). Same reasoning as above: read-uncommitted so an
+# anomaly reaches the advisor in seconds, not after a ~1 min checkpoint commit.
+resource "confluent_flink_statement" "anomalies_read_uncommitted" {
+  organization {
+    id = data.confluent_organization.org.id
+  }
+  environment {
+    id = confluent_environment.env.id
+  }
+  compute_pool {
+    id = confluent_flink_compute_pool.pool.id
+  }
+  principal {
+    id = confluent_service_account.app_manager.id
+  }
+  statement     = "ALTER TABLE `station_anomalies` SET ('kafka.consumer.isolation-level' = 'read-uncommitted');"
+  properties    = local.flink_statement_properties
+  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  credentials {
+    key    = confluent_api_key.flink.id
+    secret = confluent_api_key.flink.secret
+  }
+  depends_on = [confluent_schema.value, confluent_flink_compute_pool.pool]
+}
+
 # ---------------------------------------------------------------------------
 # 1) Windowed crowd metrics -> station_metrics
 # ---------------------------------------------------------------------------
@@ -573,5 +601,6 @@ resource "confluent_flink_statement" "ai_suggestions" {
     confluent_flink_statement.ai_model,
     confluent_flink_statement.anomalies,
     confluent_flink_statement.metrics_read_uncommitted,
+    confluent_flink_statement.anomalies_read_uncommitted,
   ]
 }

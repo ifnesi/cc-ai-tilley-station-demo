@@ -38,16 +38,21 @@ flowchart LR
   end
 
   subgraph cloud["Confluent Cloud"]
-    RAW["Emulator topics<br/>passengers_flow · train_in_transit · train_in_station<br/>station_occupancy · signal_state · gateline_state"]
+    EVT["Event topics<br/>passengers_flow · train_in_transit<br/>train_in_station · station_occupancy"]
+    CTRL["Control topics<br/>signal_state · gateline_state"]
     FLINK["Flink SQL (analytics only)<br/>windowed metrics · ML anomaly filter · AI advisor"]
     DER["Derived topics<br/>station_metrics · station_anomalies<br/>station_ai_suggestions"]
   end
 
   BR["AWS Bedrock<br/>(GenAI)"]
 
-  EM -->|Avro events| RAW --> FLINK --> DER
+  BR ~~~ FLINK
+  EM -->|Avro events| EVT
+  EM -->|deterministic control| CTRL
+  EVT --> FLINK --> DER
   FLINK <-->|ML_PREDICT| BR
-  RAW --> BE
+  EVT --> BE
+  CTRL --> BE
   DER --> BE -->|WebSocket| UI
   UI -->|Rush Hour toggle| BE -->|demo_control| EM
 ```
@@ -95,8 +100,8 @@ flowchart LR
   SO --> J1
   J1 --> SM
   SM --> J2 --> SA
+  SA --> J6
   SM --> J6
-  SO --> J6
   J6 --> AI
   J6 <-->|ML_PREDICT| BR
 ```
@@ -106,12 +111,17 @@ Read left to right, it tells the whole Flink story:
 1. **Stream processing** — `01` fans four raw event streams into one and runs a
    single tumbling-window aggregation (`TUMBLE`) into `station_metrics`: crowd
    counts per 15-second window, continuously.
-2. **Built-in ML** — `02` runs `ML_DETECT_ANOMALIES` over that windowed stream.
-   This is the **filter**: instead of paging staff on every busy window, only
-   genuinely abnormal crowd spikes flow into `station_anomalies`.
-3. **GenAI** — `06` takes those anomalies (and occupancy thresholds) and calls
-   `ML_PREDICT` against a Bedrock model (`05` registers it) to write
-   `station_ai_suggestions` — concrete, plain-English guidance for the ops team.
+2. **Built-in ML** — `02` runs `ML_DETECT_ANOMALIES` over that windowed stream
+   (the single place the anomaly ML runs). Only genuinely abnormal crowd spikes
+   flow into `station_anomalies`, which feeds **both** the dashboard (the red
+   markers on the occupancy chart) **and** the AI advisor.
+3. **GenAI** — `06` calls `ML_PREDICT` against a Bedrock model (`05` registers it,
+   with a ~20-action London-Underground toolkit) to write `station_ai_suggestions`
+   — concrete, plain-English guidance for the ops team. It fires from two sources:
+   **any anomaly** on `station_anomalies`, **and** occupancy *stepping up* a band
+   on `station_metrics` — BUSY (70%, an early warning), HIGH (85%), or CRITICAL
+   (95%), debounced so each step fires once. It never fires per raw event, so the
+   expensive AI stays cheap, and the advice scales from early warning to crisis.
 
 Signals and the gateline are **not** here: they are deterministic and owned by
 the emulator. Flink does what Flink is uniquely good at — windowed aggregation,

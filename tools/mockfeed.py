@@ -299,6 +299,7 @@ class MockFeed:
         lower, upper = mean - 3 * std, mean + 3 * std
         is_anom = actual > upper
         if is_anom:
+            occ = max(0, self.occupancy)
             self._emit(
                 "station_anomalies",
                 {
@@ -309,6 +310,8 @@ class MockFeed:
                     "lower_bound": lower,
                     "upper_bound": upper,
                     "is_anomaly": True,
+                    "occupancy": occ,
+                    "occupancy_pct": occ / self.capacity,
                 },
             )
             self._maybe_ai("anomaly", metric)
