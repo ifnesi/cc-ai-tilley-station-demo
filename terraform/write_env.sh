@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Write the Kafka + Schema Registry connection details into the repo-root .env,
-# updating each key IN PLACE (no duplicates). Runs two ways:
+# Write the Kafka + Schema Registry connection details and domain constants into
+# the repo-root .env, updating each key STRICTLY IN PLACE. Runs two ways:
 #
 #   * automatically, from the `terraform_data.write_env` local-exec provisioner
 #     on `terraform apply` (values are passed in as EV_* environment variables);
 #   * manually: `cd terraform && ./write_env.sh` (falls back to `terraform output`).
 #
-# Idempotent: removes any existing definition of each key (with or without an
-# `export ` prefix, empty or not) and writes a single clean `export KEY=VALUE`.
+# It replaces the value on the key's existing line (keeping its position and the
+# section comment above it); a key that is not present yet is appended once. A
+# value containing whitespace is quoted so `set -a; source .env` stays valid.
 # Safe on macOS bash 3.2.
 set -euo pipefail
 
@@ -28,12 +29,27 @@ val() {
 
 update_key() {
   local k="$1" v="$2" tmp
+  # Quote values with whitespace (e.g. STATION_NAME) so `source .env` is valid.
+  case "$v" in
+    *[[:space:]]*) v="\"$v\"" ;;
+  esac
   tmp="$(mktemp)"
-  grep -vE "^[[:space:]]*(export[[:space:]]+)?${k}=" "$ENV_FILE" >"$tmp" || true
+  if grep -qE "^[[:space:]]*(export[[:space:]]+)?${k}=" "$ENV_FILE"; then
+    # Replace the value on the FIRST existing line in place, keeping its position;
+    # drop any later duplicate definitions of the same key. awk gets the value via
+    # ENVIRON so no shell metacharacters in secrets are ever interpreted.
+    KEY="$k" VAL="$v" awk '
+      $0 ~ ("^[[:space:]]*(export[[:space:]]+)?" ENVIRON["KEY"] "=") {
+        if (!seen) { print ENVIRON["KEY"] "=" ENVIRON["VAL"]; seen=1 }
+        next
+      }
+      { print }
+    ' "$ENV_FILE" >"$tmp"
+  else
+    cat "$ENV_FILE" >"$tmp"
+    printf '%s=%s\n' "$k" "$v" >>"$tmp"
+  fi
   mv "$tmp" "$ENV_FILE"
-  # Plain KEY=VALUE (no `export`) so the file works as a Docker Compose env_file;
-  # `set -a; source .env` still exports it for Terraform / the CLI.
-  printf '%s=%s\n' "$k" "$v" >>"$ENV_FILE"
   echo "  set ${k}"
 }
 
@@ -51,4 +67,4 @@ update_key AGG_WINDOW_SECONDS "$(val AGG_WINDOW_SECONDS agg_window_seconds)"
 update_key PCT_LOW            "$(val PCT_LOW pct_low)"
 update_key PCT_HIGH           "$(val PCT_HIGH pct_high)"
 update_key PCT_CRITICAL       "$(val PCT_CRITICAL pct_critical)"
-echo "Done. Each key now appears exactly once in .env."
+echo "Done. Each key updated in place; the file layout is preserved."
