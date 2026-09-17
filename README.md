@@ -35,41 +35,7 @@ decision support. The tube theme is just the vehicle. What it demonstrates:
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  subgraph local["Runs on your machine (Docker)"]
-    EM["Python emulator<br/>owns occupancy · runs trains<br/>deterministic signals + gateline"]
-    BE["Flask + Socket.IO<br/>backend"]
-    UI["Browser dashboard"]
-  end
-
-  subgraph cloud["Confluent Cloud"]
-    EVT["Event topics<br/>passengers_flow · train_in_transit<br/>train_in_station · station_occupancy"]
-    CTRL["Control topics<br/>signal_state · gateline_state"]
-    FLINK["Flink SQL (analytics only)<br/>windowed metrics · ML anomaly filter · AI advisor"]
-    DER["Derived topics<br/>station_metrics · station_anomalies<br/>station_ai_suggestions"]
-    MCP["Managed MCP<br/>RTCE context-engine<br/>(all topics)"]
-  end
-
-  BR["AWS Bedrock<br/>(GenAI)"]
-  CC["Claude Code<br/>(.mcp.json)"]
-
-  BR ~~~ FLINK
-  EM -->|Avro events| EVT
-  EM -->|deterministic control| CTRL
-  EVT --> FLINK --> DER
-  FLINK <-->|ML_PREDICT| BR
-  EVT --> BE
-  CTRL --> BE
-  DER --> BE -->|WebSocket| UI
-  UI -->|Rush Hour toggle| BE -->|demo_control| EM
-  UI -->|Ask AI| BE -->|operator_questions| FLINK
-  FLINK -->|operator_answers| BE
-  EVT --> MCP
-  CTRL --> MCP
-  DER --> MCP
-  CC <-->|MCP / read-only| MCP
-```
+![Architecture Diagram](docs/architecture-diagram.png)
 
 **The flow:** the emulator is the single source of truth for occupancy
 (guaranteed never negative) and for the operational controls, it runs block
@@ -152,6 +118,25 @@ Signals and the gateline are **not** here: they are deterministic and owned by
 the emulator. Flink does what Flink is uniquely good at, windowed aggregation,
 streaming ML, and AI inference, on the operational event stream.
 
+## Topics
+
+The Kafka topics that power the demo:
+
+| Topic | Purpose |
+|-------|---------|
+| **passengers_flow** | Raw passenger entry/exit events from turnstiles and train doors. |
+| **train_in_transit** | Trains approaching the station, including passenger count and ETA. |
+| **train_in_station** | Trains currently at the platform, boarding/alighting passenger counts. |
+| **station_occupancy** | Real-time headcount; aggregated from turnstiles and train sensors. |
+| **signal_state** | Block signalling state (RED when train dwells, GREEN when clear). |
+| **gateline_state** | Street gateline control state (OPEN, RESTRICTED, or CLOSED based on occupancy). |
+| **demo_control** | Control events triggered by the presenter (e.g., surge toggles). |
+| **station_metrics** | Aggregated 10-second windows: foot counts, alighting, boarding, occupancy bands. |
+| **station_anomalies** | Detected anomalies flagged by `ML_DETECT_ANOMALIES` (crowd spikes). |
+| **station_ai_suggestions** | AI advisor guidance triggered by anomalies or occupancy thresholds. |
+| **operator_questions** | Free-form questions from operators asking about live station state. |
+| **operator_answers** | AI-generated answers to operator questions, enriched with live context. |
+
 ## What you need
 
 - A **Confluent Cloud** account and a **Cloud API key** (resource-management
@@ -174,7 +159,7 @@ so the Flink AI inference calls Bedrock in-region. Change `cc_cloud_region` /
 ### 1. Clone and configure
 
 ```bash
-git clone <this-repo> tube-station && cd tube-station
+git clone git@github.com:ifnesi/cc-ai-tilley-station-demo.git && cd cc-ai-tilley-station-demo
 cp .env_example .env
 ```
 
@@ -198,7 +183,7 @@ enables **RTCE on every topic** plus a read-only **`mcp-reader`** principal for
 the managed MCP server. It also writes the Kafka / Schema Registry connection
 details, the domain constants, **and** the managed-MCP URL (`CC_MCP_URL`) back
 into your root `.env` automatically. (The MCP auth token `CC_MCP_AUTH` is the one
-value you add by hand — see [Ask the live data from Claude Code](#ask-the-live-data-from-claude-code-rtce--managed-mcp).)
+value you add by hand, see [Ask the live data from Claude Code](#ask-the-live-data-from-claude-code-rtce--managed-mcp).)
 
 ### 3. Run the demo (Docker)
 
@@ -252,7 +237,7 @@ Confluent CFUs and the cluster cost money, always destroy after you're done.
 
 `terraform apply` also enables Confluent's **Real-Time Context Engine (RTCE)** on
 **every topic** in this demo (`confluent_rtce_topic`, one per topic), so the data
-is queryable through Confluent Cloud's **managed MCP server** — and Claude Code
+is queryable through Confluent Cloud's **managed MCP server**, and Claude Code
 can connect to it and ask questions about the live station data.
 
 The repo-root **`.mcp.json`** declares the server (`cc-managed-mcp`, an HTTP MCP)
@@ -266,13 +251,13 @@ and resolves from two env vars:
 }
 ```
 
-- **`CC_MCP_URL`** — Terraform builds this and writes it into `.env`. It's the
+- **`CC_MCP_URL`**, Terraform builds this and writes it into `.env`. It's the
   **regional, cluster-scoped** endpoint:
   `https://mcp.<region>.<cloud>.confluent.cloud/mcp/v1/context-engine/organizations/<org>/environments/<env>/kafka-clusters/<lkc>`
-- **`CC_MCP_AUTH`** — **you create this yourself** (Terraform does not generate
+- **`CC_MCP_AUTH`**, **you create this yourself** (Terraform does not generate
   it). The regional managed-MCP server only accepts a **Global API key**; it
   rejects a plain Cloud API key with `404 resource_not_found`, and a Global key
-  is the one credential the Terraform provider **cannot** mint — so it's a
+  is the one credential the Terraform provider **cannot** mint, so it's a
   one-time manual step (see below).
 
 ### Create the Global API key (one time)
@@ -285,7 +270,7 @@ and resolves from two env vars:
    cd terraform && terraform output mcp_reader_service_account   # the SA id to pick as owner
    ```
 3. Copy the key + secret, base64-encode `key:secret` (use `printf`, **not**
-   `echo` — a trailing newline causes a `401`), and set it as `CC_MCP_AUTH` in
+   `echo`, a trailing newline causes a `401`), and set it as `CC_MCP_AUTH` in
    your root `.env` (it's a secret; `.env` is git-ignored):
    ```bash
    printf '%s:%s' <GLOBAL_KEY> <GLOBAL_SECRET> | base64      # paste result as CC_MCP_AUTH=… in .env
@@ -342,7 +327,7 @@ test suite loads `.env_example` itself so it needs no real `.env`.
 ## How the pieces fit
 
 ```
-tube-station/
+cc-ai-tilley-station-demo/
 ├── .env_example           # template for .env, every runtime var lives here
 ├── .mcp.json              # Claude Code MCP config (managed MCP / RTCE endpoint)
 ├── Dockerfile             # one image: emulator, backend, or mock feed
