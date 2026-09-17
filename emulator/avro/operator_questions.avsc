@@ -6,7 +6,8 @@
   "fields": [
     { "name": "question_id", "type": "string", "doc": "UUID correlating the answer back to the asking browser." },
     { "name": "question", "type": "string", "doc": "The supervisor's free-text question." },
-    { "name": "station_name", "type": "string", "doc": "Join key to the latest metrics/anomaly for this station." },
+    { "name": "station_name", "type": "string", "doc": "Station the question is about." },
+    { "name": "context", "type": "string", "default": "", "doc": "Live crowd context (occupancy, flows, latest anomaly) snapshotted by the backend from its metrics/anomaly consumers, so Flink can prompt Bedrock without a join." },
     { "name": "event_time", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "Epoch milliseconds." }
   ]
 }

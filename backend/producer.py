@@ -109,7 +109,9 @@ class QuestionError(ValueError):
     """Raised on invalid operator-question input (maps to HTTP 4xx)."""
 
 
-def build_operator_question(question: str, station_name: str, question_id: Optional[str] = None) -> dict:
+def build_operator_question(
+    question: str, station_name: str, context: str = "", question_id: Optional[str] = None
+) -> dict:
     """Build and validate an operator_questions record (matches the .avsc)."""
     import uuid
 
@@ -122,6 +124,7 @@ def build_operator_question(question: str, station_name: str, question_id: Optio
         "question_id": question_id or uuid.uuid4().hex,
         "question": q,
         "station_name": station_name,
+        "context": context or "",
         "event_time": _now(),
     }
 
@@ -152,10 +155,10 @@ class QuestionProducer:
         producer = Producer(config.producer_config())
         return cls(producer, serializer)
 
-    def send(self, question: str, station_name: str, question_id: Optional[str] = None) -> dict:
+    def send(self, question: str, station_name: str, context: str = "", question_id: Optional[str] = None) -> dict:
         from confluent_kafka.serialization import MessageField, SerializationContext
 
-        record = build_operator_question(question, station_name, question_id)
+        record = build_operator_question(question, station_name, context, question_id)
         ctx = SerializationContext(self._topic, MessageField.VALUE)
         value = self._serializer(record, ctx)
         self._producer.produce(self._topic, value=value)

@@ -24,6 +24,7 @@ from backend.app import create_app  # noqa: E402
 from backend.config import Config  # noqa: E402
 from backend.consumers import ConsumerManager  # noqa: E402
 from backend.producer import DemoControlProducer, QuestionProducer  # noqa: E402
+from backend.state import LatestState  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,14 +44,16 @@ def main() -> int:
 
     demo_producer = DemoControlProducer.from_config(config)
     question_producer = QuestionProducer.from_config(config)
+    latest_state = LatestState()
     app, socketio = create_app(
         demo_producer=demo_producer,
         question_producer=question_producer,
+        latest_state=latest_state,
         config=config,
         async_mode=config.async_mode,
     )
 
-    manager = ConsumerManager(socketio, config)
+    manager = ConsumerManager(socketio, config, on_record=latest_state.update)
     manager.start()
 
     log.info(

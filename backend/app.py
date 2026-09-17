@@ -31,6 +31,7 @@ def create_app(
     *,
     demo_producer=None,
     question_producer=None,
+    latest_state=None,
     config: Optional[Config] = None,
     async_mode: str = "threading",
     frontend_dir: Optional[Path] = None,
@@ -42,6 +43,7 @@ def create_app(
     app.config["FRONTEND_DIR"] = str(frontend_dir)
     app.demo_producer = demo_producer  # type: ignore[attr-defined]
     app.question_producer = question_producer  # type: ignore[attr-defined]
+    app.latest_state = latest_state  # type: ignore[attr-defined]
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
 
@@ -89,8 +91,12 @@ def create_app(
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return jsonify(error="request body must be a JSON object"), 400
+        state = app.latest_state  # type: ignore[attr-defined]
+        context = state.context_string(ref.STATION_CAPACITY) if state is not None else ""
         try:
-            record = producer.send(question=body.get("question", ""), station_name=ref.STATION_NAME)
+            record = producer.send(
+                question=body.get("question", ""), station_name=ref.STATION_NAME, context=context
+            )
         except QuestionError as exc:
             return jsonify(error=str(exc)), 400
         # The answer arrives asynchronously on the 'operator_answer' Socket.IO

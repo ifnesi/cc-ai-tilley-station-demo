@@ -26,9 +26,9 @@ decision support. The tube theme is just the vehicle. What it demonstrates:
 - **Deterministic operational control in the emulator** (block signalling +
   gateline) — a clean separation from the analytics/AI, published to Kafka so it
   is part of the same event-driven stream.
-- **Ask-AI** — the supervisor can type an ad-hoc question; it goes onto Kafka,
-  Flink **merges it with the latest metrics + anomalies** (temporal join) and
-  asks Bedrock, and the answer streams back to the browser.
+- **Ask-AI** — the supervisor can type an ad-hoc question; the backend snapshots
+  the live metrics + anomalies into it, it goes onto Kafka, Flink asks Bedrock
+  with that context, and the answer streams back to the browser.
 
 ## Architecture
 
@@ -95,7 +95,7 @@ flowchart LR
   J1["<b>01 · metrics</b><br/>TUMBLE window<br/>per-window crowd stats"]:::job
   J2["<b>02 · anomalies</b><br/>ML_DETECT_ANOMALIES<br/>(the filter)"]:::job
   J6["<b>06 · AI advisor</b><br/>ML_PREDICT → Bedrock"]:::job
-  J7["<b>07 · operator Q&A</b><br/>temporal join + ML_PREDICT"]:::job
+  J7["<b>07 · operator Q&A</b><br/>question + context → ML_PREDICT"]:::job
 
   SM(["station_metrics"]):::topic
   SA(["station_anomalies"]):::topic
@@ -114,8 +114,6 @@ flowchart LR
   J6 --> AI
   J6 <-->|ML_PREDICT| BR
   OQ --> J7
-  SM --> J7
-  SA --> J7
   J7 --> OA
   J7 <-->|ML_PREDICT| BR
 ```
@@ -137,15 +135,13 @@ Read left to right, it tells the whole Flink story:
    (85%), or CRITICAL (95%). It never fires per raw event, so the expensive AI
    stays cheap, and the advice scales from early warning to crisis.
 4. **GenAI on demand** — `07` powers the **Ask-AI** feature: a supervisor
-   question on `operator_questions` is **temporal-joined** with the latest
-   `station_metrics` + `station_anomalies` (so the model has live context), sent
-   to a second Bedrock model (`05b`), and the answer written to `operator_answers`
-   — the classic Flink "enrich a request with the latest stream state" pattern.
+   question lands on `operator_questions` with a live-context snapshot the backend
+   took from its metrics/anomaly consumers; `07` sends it to a second Bedrock
+   model (`05b`) via `ML_PREDICT` and writes the answer to `operator_answers`.
 
 Signals and the gateline are **not** here: they are deterministic and owned by
 the emulator. Flink does what Flink is uniquely good at — windowed aggregation,
-streaming ML, AI inference, and stream enrichment — on the operational event
-stream.
+streaming ML, and AI inference — on the operational event stream.
 
 ## What you need
 
@@ -296,9 +292,9 @@ tube-station/
 - **Flink SQL** (`terraform/sql/`) — **analytics only**: windowed crowd metrics
   (`01`), `ML_DETECT_ANOMALIES` as the filter (`02`), the Bedrock-backed advisory
   AI (`05`/`06`, `ML_PREDICT`) triggered by anomalies + occupancy bands, and the
-  on-demand **Ask-AI** job (`05b`/`07`) that temporal-joins a supervisor question
-  with the latest metrics/anomalies before calling Bedrock. It derives insight
-  from the stream; it does not control the station.
+  on-demand **Ask-AI** job (`05b`/`07`) that answers a supervisor question — with
+  a live-context snapshot the backend attaches — via a second Bedrock model. It
+  derives insight from the stream; it does not control the station.
 - **Backend** — one Socket.IO channel per stream (`occupancy`, `metrics`,
   `anomaly`, `signal`, `gateline`, `ai_suggestion`, `operator_answer`, plus raw
   events); the `POST /demo/surge` / `POST /demo/reset` control endpoints; and

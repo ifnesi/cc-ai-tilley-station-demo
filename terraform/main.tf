@@ -23,14 +23,13 @@ locals {
     "operator_answers",
   ]
 
-  # Raw topics we window / join over — set a zero-lag watermark so windows fire
-  # promptly and the operator-question temporal join has an event-time attribute.
+  # Raw display topics we window / control over — set a zero-lag watermark so
+  # windows fire promptly and the control loops react within a few seconds.
   raw_display_topics = [
     "passengers_flow",
     "train_in_station",
     "train_in_transit",
     "station_occupancy",
-    "operator_questions",
   ]
 
   # Bedrock invoke endpoint (region + model id). Reused by the connection and by
@@ -638,8 +637,8 @@ resource "confluent_flink_statement" "ai_qa_model" {
 }
 
 # ---------------------------------------------------------------------------
-# 7) Operator Ask-AI: operator_questions + latest metrics/anomalies (temporal
-#    join) -> Bedrock -> operator_answers.
+# 7) Operator Ask-AI: operator_questions (with backend-snapshotted live context)
+#    -> Bedrock -> operator_answers. Append-only, no join.
 # ---------------------------------------------------------------------------
 resource "confluent_flink_statement" "operator_qa" {
   organization {
@@ -663,8 +662,7 @@ resource "confluent_flink_statement" "operator_qa" {
   }
   depends_on = [
     confluent_flink_statement.ai_qa_model,
-    confluent_flink_statement.watermark,
-    confluent_flink_statement.metrics_read_uncommitted,
-    confluent_flink_statement.anomalies_read_uncommitted,
+    confluent_schema.value,
+    confluent_flink_compute_pool.pool,
   ]
 }

@@ -92,12 +92,16 @@ class ConsumerManager:
         topics: Iterable[str] = CONSUMED_TOPICS,
         consumer_factory: Callable[[str], Any] | None = None,
         deserializer_factory: Callable[[], Any] | None = None,
+        on_record: Callable[[str, dict], None] | None = None,
     ):
         self._socketio = socketio
         self._config = config
         self._topics = tuple(topics)
         self._consumer_factory = consumer_factory
         self._deserializer_factory = deserializer_factory
+        # Optional side-channel called with every (topic, record) — used to keep
+        # the latest metrics/anomaly for the Ask-AI context snapshot.
+        self._on_record = on_record
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
 
@@ -158,6 +162,11 @@ class ConsumerManager:
                     record = deserializer(msg.value(), ctx)
                     if record is None:
                         continue
+                    if self._on_record is not None:
+                        try:
+                            self._on_record(topic, record)
+                        except Exception:
+                            log.exception("[%s] on_record hook failed", topic)
                     emit_record(self._socketio, topic, record)
                 except Exception:
                     log.exception("[%s] failed to handle message", topic)

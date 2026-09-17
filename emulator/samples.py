@@ -122,6 +122,7 @@ def sample_record(topic: str) -> dict:
             "question_id": "q-abc123",
             "question": "Should I open the second exit for the westbound crowd?",
             "station_name": ref.STATION_NAME,
+            "context": "occupancy 1056 of 1200 (88%); foot entries last window 240; alighting 90; boarding 70; latest anomaly on foot_in: 240 vs expected 90",
             "event_time": t,
         },
         "operator_answers": lambda: {
