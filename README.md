@@ -194,10 +194,10 @@ terraform apply
 This creates the environment, a Standard Kafka cluster, Schema Registry, all
 topics + Avro schemas, the Flink compute pool, every Flink SQL statement, the
 Bedrock connection + two models (the alert advisor and the Ask-AI model), and it
-enables **RTCE on every topic** plus a read-only **`mcp-reader`** principal for
-the managed MCP server. It also writes the Kafka / Schema Registry connection
-details, the domain constants, **and** the managed-MCP URL (`CC_MCP_URL`) back
-into your root `.env` automatically.
+enables **RTCE on every topic** plus a read-only **`mcp-reader`** principal (and
+its Cloud API key) for the managed MCP server. It also writes the Kafka / Schema
+Registry connection details, the domain constants, **and** the managed-MCP URL +
+token (`CC_MCP_URL` / `CC_MCP_AUTH`) back into your root `.env` automatically.
 
 ### 3. Run the demo (Docker)
 
@@ -267,16 +267,14 @@ and resolves from two env vars:
 
 - **`CC_MCP_URL`** — Terraform builds it and writes it into `.env`
   (`https://mcp.<region>.<cloud>.confluent.cloud/mcp/v1/context-engine/organizations/<org>/environments/<env>/kafka-clusters/<lkc>`).
-- **`CC_MCP_AUTH`** — you set this yourself: create a **Global** Cloud API key
-  (Console → Cloud API keys → Add key → *Global*) owned by the **`mcp-reader`**
-  service account Terraform created (`terraform output mcp_reader_service_account`),
-  so it inherits the read-only RBAC.
+- **`CC_MCP_AUTH`** — Terraform mints a **Global** Cloud API key owned by the
+  read-only **`mcp-reader`** service account, base64-encodes `key:secret`, and
+  writes it into `.env`. (It's a secret; the real `.env` is git-ignored.)
 
-Then launch Claude Code from the repo root:
+Then launch Claude Code from the repo root — both values come from `.env`:
 
 ```bash
-set -a; source .env; set +a          # sets CC_MCP_URL
-export CC_MCP_AUTH="$(printf '%s:%s' <GLOBAL_KEY> <GLOBAL_SECRET> | base64)"
+set -a; source .env; set +a          # exports CC_MCP_URL + CC_MCP_AUTH
 claude
 ```
 
@@ -300,7 +298,7 @@ There is no separate config data file, everything is either an **env var** or a
 
 | Where | Holds |
 |---|---|
-| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), the domain constants (`STATION_CAPACITY`, `AGG_WINDOW_SECONDS`, `PCT_LOW/HIGH/CRITICAL`, `STATION_NAME`), the demo knobs (foot/train/surge rates, `INITIAL_OCCUPANCY_FRACTION`), and the managed-MCP `CC_MCP_URL` (written by `terraform apply`; `CC_MCP_AUTH` you export yourself). Plain `KEY=VALUE` lines. |
+| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), the domain constants (`STATION_CAPACITY`, `AGG_WINDOW_SECONDS`, `PCT_LOW/HIGH/CRITICAL`, `STATION_NAME`), the demo knobs (foot/train/surge rates, `INITIAL_OCCUPANCY_FRACTION`), and the managed-MCP `CC_MCP_URL` + `CC_MCP_AUTH` (both written by `terraform apply`). Plain `KEY=VALUE` lines. |
 | **`terraform/vars.tf`** | Terraform's copy: cloud infra (region, cluster, CFUs, retention, Bedrock model) **and** the domain constants used to template the Flink SQL. |
 
 The domain constants exist in both places by design, kept in step automatically:

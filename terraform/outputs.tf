@@ -71,8 +71,14 @@ output "mcp_url" {
 }
 
 output "mcp_reader_service_account" {
-  description = "Create a GLOBAL Cloud API key owned by THIS service account, then export CC_MCP_AUTH=base64('<key>:<secret>')."
+  description = "Read-only service account behind the managed MCP endpoint (its Cloud API key is created by Terraform)."
   value       = confluent_service_account.mcp_reader.id
+}
+
+output "mcp_auth" {
+  description = "HTTP Basic token for the managed MCP endpoint (written to .env as CC_MCP_AUTH; base64 of '<key>:<secret>')."
+  sensitive   = true
+  value       = base64encode("${confluent_api_key.mcp_reader.id}:${confluent_api_key.mcp_reader.secret}")
 }
 
 # --- domain constants -> .env (so the Python apps match Flink) --------------
