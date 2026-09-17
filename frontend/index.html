@@ -121,6 +121,16 @@ function StationStrip({ trains, signals, gateline, occupancy, capacity, cfg, now
   const glColor = gl === "CLOSED" ? "var(--red)" : gl === "RESTRICTED" ? "var(--amber)" : "var(--green)";
   const zc = zoneColor(pct, cfg);
   const status = pct >= cfg.pct_critical ? "CRITICAL" : pct >= cfg.pct_high ? "HIGH" : pct >= cfg.pct_low ? "BUSY" : "NOMINAL";
+  // Keep a signal GREEN while its train is still rolling across it into the
+  // platform, so the light flips RED just AFTER the train clears it, not during.
+  const crossing = { LEFT: false, RIGHT: false };
+  trains.forEach((t) => {
+    if (t.phase === "in_station" && now - (t.tInStation || now) < ROLLIN_MS) {
+      crossing[t.dir === "east_bound" ? "LEFT" : "RIGHT"] = true;
+    }
+  });
+  const sigLeft = crossing.LEFT ? "GREEN" : signals.LEFT;
+  const sigRight = crossing.RIGHT ? "GREEN" : signals.RIGHT;
   return (
     <div className="panel area-strip">
       <h2>Live traffic</h2>
@@ -152,8 +162,8 @@ function StationStrip({ trains, signals, gateline, occupancy, capacity, cfg, now
           <text x="0" y="11.5" textAnchor="middle" fontSize="9" fill={glColor} fontWeight="700" letterSpacing="0.03em">GATE {gl}</text>
         </g>
         {/* signals — each on the track it gates: LEFT=east (top), RIGHT=west (bottom) */}
-        <Signal x={g.leftSigX} cy={g.yEast + 10} state={signals.LEFT} />
-        <Signal x={g.rightSigX} cy={g.yWest + 10} state={signals.RIGHT} />
+        <Signal x={g.leftSigX} cy={g.yEast + 10} state={sigLeft} />
+        <Signal x={g.rightSigX} cy={g.yWest + 10} state={sigRight} />
         {/* trains — queue index per side (approach trains, by arrival order) so
             following trains stack behind the signal instead of overlapping */}
         {(() => {
@@ -419,22 +429,28 @@ function App() {
     return () => socket.close();
   }, [handle]);
 
-  // animation clock + train eviction
+  // animation clock (rAF for smooth 60fps motion) + periodic train eviction.
   useEffect(() => {
-    const id = setInterval(() => {
+    let raf, lastEvict = 0;
+    const tick = () => {
       const t = performance.now();
-      for (const [sid, tr] of trains.current) {
-        if (tr.phase === "depart" && t - tr.tDepart > DEPART_MS + 400) trains.current.delete(sid);
-        // Safety net: a train whose depart event was missed would otherwise sit
-        // at the platform forever. Any dwell is <= ~20s, so after 35s send it on
-        // its way (it then animates out and is evicted normally).
-        else if (tr.phase === "in_station" && t - (tr.tInStation || t) > 35000) {
-          trains.current.set(sid, { ...tr, phase: "depart", tDepart: t });
+      if (t - lastEvict > 300) {
+        for (const [sid, tr] of trains.current) {
+          if (tr.phase === "depart" && t - tr.tDepart > DEPART_MS + 400) trains.current.delete(sid);
+          // Safety net: a train whose depart event was missed would otherwise sit
+          // at the platform forever. Any dwell is <= ~20s, so after 35s send it on
+          // its way (it then animates out and is evicted normally).
+          else if (tr.phase === "in_station" && t - (tr.tInStation || t) > 35000) {
+            trains.current.set(sid, { ...tr, phase: "depart", tDepart: t });
+          }
         }
+        lastEvict = t;
       }
       setNow(t);
-    }, 120);
-    return () => clearInterval(id);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, []);
 
   const toggleRush = useCallback(() => {
