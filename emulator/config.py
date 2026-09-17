@@ -31,7 +31,6 @@ class EmulatorConfig:
     # Station
     station_name: str = ref.STATION_NAME
     capacity: int = ref.STATION_CAPACITY
-    evacuation_flow: float = ref.EVACUATION_FLOW
 
     # Generation rates
     foot_min: int = 1
@@ -79,8 +78,7 @@ class EmulatorConfig:
             schema_registry_url=e.get("SCHEMA_REGISTRY_URL", ""),
             schema_registry_api_key=e.get("SCHEMA_REGISTRY_API_KEY", ""),
             schema_registry_api_secret=e.get("SCHEMA_REGISTRY_API_SECRET", ""),
-            # station_name/capacity/evacuation_flow come from demo.config.json
-            # (via reference.py) — the single source of truth, not .env.
+            # station_name/capacity come from reference.py (which reads .env).
             foot_min=int(e.get("FOOT_MIN", "1")),
             foot_max=int(e.get("FOOT_MAX", "40")),
             train_min=int(e.get("TRAIN_MIN", "10")),

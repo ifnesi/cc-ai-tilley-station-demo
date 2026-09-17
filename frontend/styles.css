@@ -52,8 +52,7 @@ main {
   grid-template-areas:
     "ai     ai     ai     ai     ai     ai     ai     ai     ai     ai"
     "feed   feed   feed   strip  strip  strip  strip  strip  strip  strip"
-    "chartA chartA chartA chartA chartA chartB chartB chartB chartB chartB"
-    "safety safety safety safety safety safety safety safety safety safety";
+    "chartA chartA chartA chartA chartA chartB chartB chartB chartB chartB";
   max-width: 1600px; margin: 0 auto;
 }
 @media (max-width: 1100px) {
@@ -63,12 +62,11 @@ main {
       "ai ai"
       "strip strip"
       "feed feed"
-      "chartA chartB"
-      "safety safety";
+      "chartA chartB";
   }
 }
 @media (max-width: 720px) {
-  main { grid-template-columns: 1fr; grid-template-areas: "ai" "strip" "feed" "chartA" "chartB" "safety"; }
+  main { grid-template-columns: 1fr; grid-template-areas: "ai" "strip" "feed" "chartA" "chartB"; }
 }
 
 .panel {
@@ -79,26 +77,14 @@ main {
   font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted);
   margin: 0 0 10px;
 }
-.area-safety { grid-area: safety; }
 .area-strip { grid-area: strip; }
 .area-chartA { grid-area: chartA; }
 .area-chartB { grid-area: chartB; }
 .area-feed { grid-area: feed; }
 .area-ai { grid-area: ai; }
 
-/* ---------- safety ---------- */
-/* full-width bottom tile: spread the stats across as many columns as fit */
-.safety-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-.stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-.stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.stat .value { font-size: 24px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
-.stat .value small { font-size: 13px; color: var(--muted); font-weight: 600; }
-
 /* ---------- station strip ---------- */
 .area-strip svg { width: 100%; height: auto; display: block; }
-.legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 8px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
 /* ---------- charts ---------- */
 .chart-box { position: relative; height: 200px; }
@@ -124,16 +110,17 @@ main {
 .tag.gateline { background: rgba(210,153,34,.15); color: #e3b341; }
 
 /* ---------- AI advice ---------- */
-.ai-list { display: flex; flex-direction: column; gap: 10px; max-height: 300px; overflow: auto; }
+/* Title stays put; the advice history scrolls (newest on top), ~5 lines tall. */
+.ai-scroll { max-height: 8.5em; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .ai-card { background: var(--panel-2); border: 1px solid var(--border); border-left-width: 4px; border-radius: 8px; padding: 10px 12px; }
 .ai-card.LOW { border-left-color: var(--green); }
 .ai-card.MEDIUM { border-left-color: var(--amber); }
 .ai-card.HIGH { border-left-color: var(--red); }
-.ai-chip { display: inline-block; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .05em; }
+.ai-chip { display: inline-block; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .05em; }
 .ai-chip.LOW { background: rgba(46,160,67,.2); color: #56d364; }
 .ai-chip.MEDIUM { background: rgba(210,153,34,.2); color: #e3b341; }
 .ai-chip.HIGH { background: rgba(248,81,73,.2); color: #ff7b72; }
-.ai-card .line { font-size: 12.5px; margin-top: 5px; color: #c9d1d9; }
-.ai-card .line b { color: var(--muted); font-weight: 700; }
-.ai-time { color: #6e7681; font-size: 11px; margin-left: 8px; }
+.ai-line { font-size: 14px; line-height: 1.45; margin-top: 5px; color: #c9d1d9; }
+.ai-line b { color: var(--muted); font-weight: 700; }
+.ai-time { color: #6e7681; font-size: 12px; margin-left: 8px; }
 .empty { color: #6e7681; font-size: 13px; padding: 8px 0; }

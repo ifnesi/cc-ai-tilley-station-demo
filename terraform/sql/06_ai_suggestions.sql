@@ -22,7 +22,6 @@ occ AS (
     occupancy,
     capacity,
     CAST(occupancy AS DOUBLE) / NULLIF(CAST(capacity AS DOUBLE), 0) AS pct,
-    CAST(occupancy AS DOUBLE) / ${evacuation_flow} AS evac,
     `$rowtime` AS event_time
   FROM station_occupancy
 ),
@@ -38,7 +37,7 @@ threshold_trig AS (
     ${pct_high} * CAST(capacity AS DOUBLE) AS forecast,
     CAST(occupancy AS DOUBLE) AS occupancy,
     CAST(capacity AS DOUBLE) AS capacity,
-    pct, evac, event_time
+    pct, event_time
   FROM occ_lag
   WHERE (prev_pct < ${pct_high} AND pct >= ${pct_high})
      OR (prev_pct < ${pct_critical} AND pct >= ${pct_critical})
@@ -47,12 +46,12 @@ metrics_keyed AS (
   -- station_name is a real column on station_metrics, so PARTITION BY it in the
   -- OVER windows below is a genuine key (not a constant), clearing
   -- MISSING_PARTITION_BY_FOR_OVER_WINDOW.
-  SELECT station_name, occupancy, occupancy_pct, evac_time, foot_in, window_start, `$rowtime`
+  SELECT station_name, occupancy, occupancy_pct, foot_in, window_start, `$rowtime`
   FROM station_metrics
 ),
 metrics_anom AS (
   SELECT
-    station_name, occupancy, occupancy_pct AS pct, evac_time AS evac, `$rowtime` AS event_time,
+    station_name, occupancy, occupancy_pct AS pct, `$rowtime` AS event_time,
     ML_DETECT_ANOMALIES(
       CAST(foot_in AS DOUBLE), window_start,
       JSON_OBJECT('minTrainingSize' VALUE ${min_training_size}, 'maxTrainingSize' VALUE 512, 'enableStl' VALUE false)
@@ -78,7 +77,7 @@ anomaly_trig AS (
     r.forecast_value AS forecast,
     CAST(occupancy AS DOUBLE) AS occupancy,
     CAST(${station_capacity} AS DOUBLE) AS capacity,
-    pct, evac, event_time
+    pct, event_time
   FROM metrics_anom_lag
   WHERE r.is_anomaly AND (prev_anom IS NULL OR prev_anom = 0)
 ),
@@ -105,7 +104,6 @@ prompted AS (
       '. Occupancy: ', CAST(CAST(ROUND(occupancy) AS INT) AS STRING),
       ' of ', CAST(CAST(ROUND(capacity) AS INT) AS STRING),
       ' (', CAST(CAST(ROUND(pct * 100) AS INT) AS STRING), '%). ',
-      'Evacuation time: ', CAST(CAST(ROUND(evac) AS INT) AS STRING), 's. ',
       'Status: ',
       CASE
         WHEN pct >= ${pct_critical} THEN 'CRITICAL'

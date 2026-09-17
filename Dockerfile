@@ -14,8 +14,7 @@ COPY emulator/requirements.txt emulator/requirements.txt
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r emulator/requirements.txt -r backend/requirements.txt
 
-# Application code + the single-source config.
-COPY demo.config.json ./
+# Application code (all config comes from the .env passed at runtime).
 COPY emulator/ emulator/
 COPY backend/ backend/
 COPY frontend/ frontend/

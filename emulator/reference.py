@@ -10,45 +10,46 @@ Only Tilley is modelled for crowding; the neighbours are visual endpoints.
 
 from __future__ import annotations
 
-import json
+import os
 import pathlib
 
-# --- Shared domain constants: single source of truth ----------------------
-# demo.config.json (repo root) is read by BOTH Terraform and Python so the
-# station/window/threshold values are defined once. Fallback defaults keep this
-# import working even if the file is missing (e.g. isolated unit runs).
+from dotenv import load_dotenv
 
-_CONFIG_PATH = pathlib.Path(__file__).resolve().parents[1] / "demo.config.json"
-_DEFAULTS: dict[str, object] = {
-    "station_name": "Tilley Station",
-    "station_capacity": 1200,
-    "evacuation_flow": 3.5,
-    "agg_window_seconds": 15,
-    "pct_low": 0.70,
-    "pct_high": 0.85,
-    "pct_critical": 0.95,
-    "evac_warn": 360,
-    "evac_crit": 480,
+# --- Shared domain constants: from the environment (.env) -----------------
+# Every configurable value lives in the root .env (documented in .env_example);
+# Terraform holds its own copy in terraform/vars.tf and writes the resolved
+# values back into .env on apply. The fallbacks here keep imports working for
+# tests / previews before a .env exists. No values live in a separate data file.
+load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env")
+
+_DEFAULTS: dict[str, str] = {
+    "STATION_NAME": "Tilley Station",
+    "STATION_CAPACITY": "1200",
+    "AGG_WINDOW_SECONDS": "15",
+    "PCT_LOW": "0.70",
+    "PCT_HIGH": "0.85",
+    "PCT_CRITICAL": "0.95",
 }
 
 
-def _load_config() -> dict[str, object]:
-    try:
-        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return dict(_DEFAULTS)
-    # ignore the _comment key and any unknown extras; fall back per-key
-    return {k: data.get(k, v) for k, v in _DEFAULTS.items()}
+def _cfg(key: str) -> str:
+    return os.environ.get(key, _DEFAULTS[key])
 
 
-_CONFIG = _load_config()
+_CONFIG = {
+    "station_name": _cfg("STATION_NAME"),
+    "station_capacity": int(_cfg("STATION_CAPACITY")),
+    "agg_window_seconds": int(_cfg("AGG_WINDOW_SECONDS")),
+    "pct_low": float(_cfg("PCT_LOW")),
+    "pct_high": float(_cfg("PCT_HIGH")),
+    "pct_critical": float(_cfg("PCT_CRITICAL")),
+}
 
 # --- station_data (one modelled station) -------------------------------
 
 STATION_DATA: dict[str, object] = {
     "station_name": _CONFIG["station_name"],
     "capacity": int(_CONFIG["station_capacity"]),  # max passengers inside (excludes staff)
-    "evacuation_flow": float(_CONFIG["evacuation_flow"]),  # passengers/second to evacuate
 }
 
 # --- train_data (four classes) -----------------------------------------
@@ -99,16 +100,13 @@ DIRECTION_META: dict[str, dict[str, str]] = {
 
 STATION_NAME: str = STATION_DATA["station_name"]  # type: ignore[assignment]
 STATION_CAPACITY: int = STATION_DATA["capacity"]  # type: ignore[assignment]
-EVACUATION_FLOW: float = STATION_DATA["evacuation_flow"]  # type: ignore[assignment]
 
-# Windowing + control thresholds (Flink's domain; exposed here so any Python
-# that needs them reads the same single source). See demo.config.json.
+# Windowing + control thresholds (from .env; Flink uses the same values from
+# terraform/vars.tf). Documented in .env_example.
 AGG_WINDOW_SECONDS: int = int(_CONFIG["agg_window_seconds"])
 PCT_LOW: float = float(_CONFIG["pct_low"])
 PCT_HIGH: float = float(_CONFIG["pct_high"])
 PCT_CRITICAL: float = float(_CONFIG["pct_critical"])
-EVAC_WARN: float = float(_CONFIG["evac_warn"])
-EVAC_CRIT: float = float(_CONFIG["evac_crit"])
 
 
 def train_capacity(train_type: str) -> int:

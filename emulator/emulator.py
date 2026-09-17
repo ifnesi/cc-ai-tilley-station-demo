@@ -99,15 +99,14 @@ class Emulator:
     def _update_gateline(self) -> None:
         """Set the street gateline straight from occupancy (deterministic rule).
 
-        OPEN < HIGH <= RESTRICTED < CRITICAL <= CLOSED (evac time can also trip
-        the higher band). Sets the throttle StationState applies to foot inflow
-        and publishes gateline_state on change (emit-on-change) for the dashboard.
+        OPEN < HIGH <= RESTRICTED < CRITICAL <= CLOSED. Sets the throttle
+        StationState applies to foot inflow and publishes gateline_state on
+        change (emit-on-change) for the dashboard.
         """
         pct = self.state.occupancy_pct()
-        evac = self.state.evac_time()
-        if pct >= ref.PCT_CRITICAL or evac >= ref.EVAC_CRIT:
+        if pct >= ref.PCT_CRITICAL:
             state, throttle = "CLOSED", ref.THROTTLE_CLOSED
-        elif pct >= ref.PCT_HIGH or evac >= ref.EVAC_WARN:
+        elif pct >= ref.PCT_HIGH:
             state, throttle = "RESTRICTED", ref.THROTTLE_RESTRICTED
         else:
             state, throttle = "OPEN", ref.THROTTLE_OPEN

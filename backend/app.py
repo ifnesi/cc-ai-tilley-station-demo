@@ -85,17 +85,14 @@ def create_app(
 
     @app.get("/config")
     def config_endpoint():
-        # Domain constants for the dashboard, from the single source (demo.config.json).
+        # Domain constants for the dashboard (from env via reference.py).
         return jsonify(
             station_name=ref.STATION_NAME,
             capacity=ref.STATION_CAPACITY,
-            evacuation_flow=ref.EVACUATION_FLOW,
             agg_window_seconds=ref.AGG_WINDOW_SECONDS,
             pct_low=ref.PCT_LOW,
             pct_high=ref.PCT_HIGH,
             pct_critical=ref.PCT_CRITICAL,
-            evac_warn=ref.EVAC_WARN,
-            evac_crit=ref.EVAC_CRIT,
             neighbour_west=ref.NEIGHBOUR_WEST,
             neighbour_east=ref.NEIGHBOUR_EAST,
             surge_duration=config.surge_duration,

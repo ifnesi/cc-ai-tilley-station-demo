@@ -77,7 +77,6 @@ def sample_record(topic: str) -> dict:
             "net_change": 65,
             "occupancy": 540,
             "occupancy_pct": 540 / ref.STATION_CAPACITY,
-            "evac_time": 540 / ref.EVACUATION_FLOW,
         },
         "station_anomalies": lambda: {
             "window_start": t,

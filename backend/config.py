@@ -40,7 +40,7 @@ class Config:
     async_mode: str = "threading"
 
     demo_control_topic: str = "demo_control"
-    agg_window_seconds: int = ref.AGG_WINDOW_SECONDS  # from demo.config.json
+    agg_window_seconds: int = ref.AGG_WINDOW_SECONDS  # from .env via reference.py
 
     # Surge defaults (used when the presenter does not override,).
     surge_factor: float = 5.0
@@ -64,7 +64,7 @@ class Config:
             schema_registry_api_key=e.get("SCHEMA_REGISTRY_API_KEY", ""),
             schema_registry_api_secret=e.get("SCHEMA_REGISTRY_API_SECRET", ""),
             consumer_group=e.get("CONSUMER_GROUP", "tilley-demo-backend"),
-            # agg_window_seconds comes from demo.config.json (single source), not .env
+            # agg_window_seconds comes from reference.py (which reads it from .env)
             host=e.get("BACKEND_HOST", "0.0.0.0"),
             port=int(e.get("BACKEND_PORT", "8080")),
             async_mode=e.get("SOCKETIO_ASYNC_MODE", "threading"),

@@ -18,13 +18,11 @@ class StationState:
     def __init__(
         self,
         capacity: int,
-        evacuation_flow: float,
         initial_occupancy: int = 0,
         clock: Callable[[], float] = time.monotonic,
     ):
         self._lock = threading.RLock()
         self._capacity = capacity
-        self._evac_flow = evacuation_flow
         self._initial_occupancy = max(0, initial_occupancy)
         self._occupancy = self._initial_occupancy
         self._clock = clock
@@ -51,10 +49,6 @@ class StationState:
     def occupancy_pct(self) -> float:
         with self._lock:
             return self._occupancy / self._capacity if self._capacity else 0.0
-
-    def evac_time(self) -> float:
-        with self._lock:
-            return self._occupancy / self._evac_flow if self._evac_flow else 0.0
 
     def admit_foot(self, base: int) -> int:
         """Admit street foot flow: entered = round(base * surge * throttle).

@@ -16,7 +16,7 @@
 INSERT INTO station_metrics
   (station_name, window_start, window_end, foot_in, alight_wait, alight_exit,
    alight_total, board_total, alight_east, alight_west, board_east, board_west,
-   net_change, occupancy, occupancy_pct, evac_time)
+   net_change, occupancy, occupancy_pct)
 -- station_name is the per-station GROUP BY key (metrics are per station). This
 -- models one station today, so it is a single partition, but keeping the key
 -- makes the aggregation partitioned/parallelisable and future-proofs multiple
@@ -83,7 +83,6 @@ SELECT
   CAST(SUM(board_west) AS INT) AS board_west,
   CAST(SUM(foot_in) + SUM(alight_wait) - SUM(board_total) AS INT) AS net_change,
   CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS INT) AS occupancy,
-  CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS DOUBLE) / NULLIF(CAST(MAX(cap) AS DOUBLE), 0) AS occupancy_pct,
-  CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS DOUBLE) / ${evacuation_flow} AS evac_time
+  CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS DOUBLE) / NULLIF(CAST(MAX(cap) AS DOUBLE), 0) AS occupancy_pct
 FROM TABLE(TUMBLE(TABLE unified, DESCRIPTOR(ts), INTERVAL '${window_seconds}' SECOND))
 GROUP BY window_start, window_end, station_name;

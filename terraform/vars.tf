@@ -155,11 +155,45 @@ variable "ai_max_tokens" {
 }
 
 # ---------------------------------------------------------------------------
-# Domain constants (station_name, station_capacity, evacuation_flow,
-# agg_window_seconds, pct_low/high/critical, evac_warn/crit) are NOT variables:
-# they live once in the repo-root demo.config.json, read by both this Terraform
-# (local.demo) and the Python emulator/backend. Edit them there.
+# Domain constants — Terraform's copy (used to template the Flink SQL). On apply,
+# write_env.sh writes the resolved values into the repo-root .env so the Python
+# emulator/backend read the same numbers (documented in .env_example). Change a
+# value here and re-apply, or override it per-run in the .env before starting the
+# apps. Keep the two in step by editing here and re-applying.
 # ---------------------------------------------------------------------------
+variable "station_name" {
+  type    = string
+  default = "Tilley Station"
+}
+
+variable "station_capacity" {
+  type        = number
+  default     = 1200
+  description = "Max passengers inside the station (the crowd cap)."
+}
+
+variable "agg_window_seconds" {
+  type        = number
+  default     = 15
+  description = "Tumbling window size for the Flink crowd metrics."
+}
+
+variable "pct_low" {
+  type    = number
+  default = 0.70
+}
+
+variable "pct_high" {
+  type        = number
+  default     = 0.85
+  description = "Gateline RESTRICTED / concourse-busy threshold (fraction of capacity)."
+}
+
+variable "pct_critical" {
+  type        = number
+  default     = 0.95
+  description = "Gateline CLOSED / critical threshold (fraction of capacity)."
+}
 
 variable "min_training_size" {
   type        = number

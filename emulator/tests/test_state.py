@@ -8,8 +8,8 @@ from emulator import reference as ref
 from emulator.state import StationState
 
 
-def make_state(occ=0, cap=1200, evac=3.5, clock=None):
-    return StationState(capacity=cap, evacuation_flow=evac, initial_occupancy=occ,
+def make_state(occ=0, cap=1200, clock=None):
+    return StationState(capacity=cap, initial_occupancy=occ,
                         clock=clock or (lambda: 0.0))
 
 
@@ -43,7 +43,7 @@ def test_admit_foot_applies_throttle():
 
 def test_admit_foot_applies_surge():
     clock = {"t": 0.0}
-    st = StationState(capacity=1200, evacuation_flow=3.5, initial_occupancy=0, clock=lambda: clock["t"])
+    st = StationState(capacity=1200, initial_occupancy=0, clock=lambda: clock["t"])
     st.start_surge(factor=5.0, duration_seconds=10)
     assert st.admit_foot(10) == 50  # 10 * surge5 * throttle1
     clock["t"] = 20.0  # surge expired
@@ -52,7 +52,7 @@ def test_admit_foot_applies_surge():
 
 def test_reset_returns_to_midband_and_clears_surge():
     clock = {"t": 0.0}
-    st = StationState(capacity=1000, evacuation_flow=3.5, initial_occupancy=450, clock=lambda: clock["t"])
+    st = StationState(capacity=1000, initial_occupancy=450, clock=lambda: clock["t"])
     st.start_surge(5.0, 60)
     st.alight_to_wait(300)
     st.set_throttle(0.0)                 # gateline CLOSED during the surge

@@ -64,6 +64,14 @@ output "flink_api_secret" {
   sensitive = true
 }
 
+# --- domain constants -> .env (so the Python apps match Flink) --------------
+output "station_name" { value = var.station_name }
+output "station_capacity" { value = var.station_capacity }
+output "agg_window_seconds" { value = var.agg_window_seconds }
+output "pct_low" { value = var.pct_low }
+output "pct_high" { value = var.pct_high }
+output "pct_critical" { value = var.pct_critical }
+
 # Convenience: the .env lines for the Kafka/SR block. Secrets are redacted
 # unless you read them explicitly with `terraform output -raw`.
 output "env_block" {
@@ -76,5 +84,11 @@ output "env_block" {
     SCHEMA_REGISTRY_URL=${data.confluent_schema_registry_cluster.sr.rest_endpoint}
     SCHEMA_REGISTRY_API_KEY=${confluent_api_key.sr.id}
     SCHEMA_REGISTRY_API_SECRET=${confluent_api_key.sr.secret}
+    STATION_NAME=${var.station_name}
+    STATION_CAPACITY=${var.station_capacity}
+    AGG_WINDOW_SECONDS=${var.agg_window_seconds}
+    PCT_LOW=${var.pct_low}
+    PCT_HIGH=${var.pct_high}
+    PCT_CRITICAL=${var.pct_critical}
   EOT
 }

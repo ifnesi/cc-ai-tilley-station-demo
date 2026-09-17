@@ -18,7 +18,6 @@
     { "name": "board_west", "type": "int", "doc": "board_total for west_bound trains." },
     { "name": "net_change", "type": "int", "doc": "foot_in + alight_wait - board_total." },
     { "name": "occupancy", "type": "int", "doc": "Latest station_occupancy snapshot in the window." },
-    { "name": "occupancy_pct", "type": "double", "doc": "occupancy / capacity." },
-    { "name": "evac_time", "type": "double", "doc": "occupancy / evacuation_flow (seconds to clear - the safety KPI)." }
+    { "name": "occupancy_pct", "type": "double", "doc": "occupancy / capacity." }
   ]
 }

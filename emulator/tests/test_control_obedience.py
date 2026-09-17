@@ -27,8 +27,7 @@ def make_emulator(occupancy: int | None = None, **overrides):
         foot_interval=0.02, **overrides,
     )
     occ = cfg.initial_occupancy if occupancy is None else occupancy
-    state = StationState(capacity=cfg.capacity, evacuation_flow=cfg.evacuation_flow,
-                         initial_occupancy=occ)
+    state = StationState(capacity=cfg.capacity, initial_occupancy=occ)
     return Emulator(cfg, state, InMemoryEventProducer(validate=True)), state, cfg
 
 
@@ -109,8 +108,7 @@ def test_opposite_sides_do_not_block_each_other():
 
 def test_demo_control_surge_and_reset():
     cfg = EmulatorConfig()
-    state = StationState(capacity=cfg.capacity, evacuation_flow=cfg.evacuation_flow,
-                         initial_occupancy=cfg.initial_occupancy)
+    state = StationState(capacity=cfg.capacity, initial_occupancy=cfg.initial_occupancy)
     control = ControlConsumers(cfg, state)
 
     control._on_demo_control({"command": "SURGE", "factor": 5.0, "duration_seconds": 30})

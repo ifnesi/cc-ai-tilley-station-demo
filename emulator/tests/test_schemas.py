@@ -3,7 +3,7 @@
 - Every .avsc compiles.
 - A sample record for each topic serializes and deserializes cleanly
   (Avro round-trip) and validates against its schema.
-- reference.py matches (station capacity/evac + four train types).
+- reference.py exposes the domain constants + four train types.
 - .env_example lists every key in
 """
 
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import datetime as dt
 import io
-import json
 import pathlib
 
 import fastavro
@@ -99,9 +98,8 @@ def test_optional_passengers_boarding_defaults_null():
 # --- reference.py matches ----------------------------------------------
 
 def test_station_reference_matches_spec():
-    assert ref.STATION_DATA["station_name"] == "Tilley Station"
-    assert ref.STATION_DATA["capacity"] == 1200
-    assert ref.STATION_DATA["evacuation_flow"] == 3.5
+    assert ref.STATION_DATA["station_name"] == ref.STATION_NAME
+    assert ref.STATION_DATA["capacity"] == ref.STATION_CAPACITY
 
 
 def test_train_reference_matches_spec():
@@ -149,6 +147,14 @@ SPEC_ENV_KEYS = {
     "SURGE_FACTOR",
     "SURGE_DURATION",
     "AUTO_SURGE_AFTER",
+    "INITIAL_OCCUPANCY_FRACTION",
+    # Domain constants now live in .env (no separate demo.config.json).
+    "STATION_NAME",
+    "STATION_CAPACITY",
+    "AGG_WINDOW_SECONDS",
+    "PCT_LOW",
+    "PCT_HIGH",
+    "PCT_CRITICAL",
 }
 
 
@@ -171,31 +177,22 @@ def test_env_example_covers_every_spec_key():
     assert not missing, f".env_example missing required keys: {sorted(missing)}"
 
 
-# --- single source of truth for domain constants (demo.config.json) --------
+# --- domain constants now live in .env (no separate demo.config.json) ------
 
-DOMAIN_KEYS = {
-    "station_name", "station_capacity", "evacuation_flow", "agg_window_seconds",
-    "pct_low", "pct_high", "pct_critical", "evac_warn", "evac_crit",
+DOMAIN_ENV_KEYS = {
+    "STATION_NAME", "STATION_CAPACITY", "AGG_WINDOW_SECONDS",
+    "PCT_LOW", "PCT_HIGH", "PCT_CRITICAL",
 }
 
 
-def test_demo_config_has_all_domain_keys():
-    cfg = json.loads((REPO_ROOT / "demo.config.json").read_text(encoding="utf-8"))
-    assert DOMAIN_KEYS <= set(cfg), f"demo.config.json missing: {sorted(DOMAIN_KEYS - set(cfg))}"
+def test_env_example_has_domain_constants():
+    keys = _env_keys(REPO_ROOT / ".env_example")
+    missing = DOMAIN_ENV_KEYS - keys
+    assert not missing, f".env_example missing domain constants: {sorted(missing)}"
 
 
-def test_reference_reads_demo_config():
-    cfg = json.loads((REPO_ROOT / "demo.config.json").read_text(encoding="utf-8"))
-    assert ref.STATION_NAME == cfg["station_name"]
-    assert ref.STATION_CAPACITY == cfg["station_capacity"]
-    assert ref.EVACUATION_FLOW == cfg["evacuation_flow"]
-    assert ref.AGG_WINDOW_SECONDS == cfg["agg_window_seconds"]
-    assert ref.PCT_HIGH == cfg["pct_high"]
-    assert ref.EVAC_CRIT == cfg["evac_crit"]
-
-
-def test_domain_constants_not_duplicated_in_env_example():
-    # Domain constants live only in demo.config.json — never re-added to .env.
-    env_keys_lower = {k.lower() for k in _env_keys(REPO_ROOT / ".env_example")}
-    dupes = DOMAIN_KEYS & env_keys_lower
-    assert not dupes, f"domain constants duplicated in .env_example: {sorted(dupes)}"
+def test_reference_exposes_domain_constants():
+    assert isinstance(ref.STATION_NAME, str) and ref.STATION_NAME
+    assert isinstance(ref.STATION_CAPACITY, int) and ref.STATION_CAPACITY > 0
+    assert isinstance(ref.AGG_WINDOW_SECONDS, int) and ref.AGG_WINDOW_SECONDS > 0
+    assert 0 < ref.PCT_LOW < ref.PCT_HIGH < ref.PCT_CRITICAL <= 1.0

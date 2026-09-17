@@ -62,6 +62,61 @@ to turn those into advice for staff — it does **not** control the station. The
 browser sees everything live over WebSockets, and the presenter can trigger a
 crowd surge on demand (`demo_control`).
 
+## The Flink pipeline — where the power is
+
+This is the heart of the demo: a chain of Flink SQL jobs, each reading Kafka
+topics and writing Kafka topics — exactly what Confluent Cloud's
+[Stream Lineage](https://docs.confluent.io/cloud/current/stream-governance/stream-lineage.html)
+shows you live. Rounded boxes are **Kafka topics**; rectangles are **Flink SQL
+jobs** (`terraform/sql/`):
+
+```mermaid
+flowchart LR
+  classDef topic fill:#0d2233,stroke:#4aa3c7,color:#dbeafe;
+  classDef job fill:#2a1436,stroke:#b06fd6,color:#f3e8ff;
+
+  PF(["passengers_flow"]):::topic
+  TT(["train_in_transit"]):::topic
+  TS(["train_in_station"]):::topic
+  SO(["station_occupancy"]):::topic
+
+  J1["<b>01 · metrics</b><br/>TUMBLE window<br/>per-window crowd stats"]:::job
+  J2["<b>02 · anomalies</b><br/>ML_DETECT_ANOMALIES<br/>(the filter)"]:::job
+  J6["<b>06 · AI advisor</b><br/>ML_PREDICT → Bedrock"]:::job
+
+  SM(["station_metrics"]):::topic
+  SA(["station_anomalies"]):::topic
+  AI(["station_ai_suggestions"]):::topic
+  BR["AWS Bedrock<br/>Claude Sonnet"]
+
+  PF --> J1
+  TT --> J1
+  TS --> J1
+  SO --> J1
+  J1 --> SM
+  SM --> J2 --> SA
+  SM --> J6
+  SO --> J6
+  J6 --> AI
+  J6 <-->|ML_PREDICT| BR
+```
+
+Read left to right, it tells the whole Flink story:
+
+1. **Stream processing** — `01` fans four raw event streams into one and runs a
+   single tumbling-window aggregation (`TUMBLE`) into `station_metrics`: crowd
+   counts per 15-second window, continuously.
+2. **Built-in ML** — `02` runs `ML_DETECT_ANOMALIES` over that windowed stream.
+   This is the **filter**: instead of paging staff on every busy window, only
+   genuinely abnormal crowd spikes flow into `station_anomalies`.
+3. **GenAI** — `06` takes those anomalies (and occupancy thresholds) and calls
+   `ML_PREDICT` against a Bedrock model (`05` registers it) to write
+   `station_ai_suggestions` — concrete, plain-English guidance for the ops team.
+
+Signals and the gateline are **not** here: they are deterministic and owned by
+the emulator. Flink does what Flink is uniquely good at — windowed aggregation,
+streaming ML, and AI inference — on the operational event stream.
+
 ## What you need
 
 - A **Confluent Cloud** account and a **Cloud API key** (resource-management
@@ -116,11 +171,11 @@ docker compose up --build
 This starts the **emulator** (generates traffic) and the **backend** (serves the
 dashboard). Open **http://localhost:8080**.
 
-The dashboard shows a platform-safety panel (evacuation time), an animated
+The dashboard shows the **AI supervisor advice** feed at the top, an animated
 station strip (trains approaching, queueing behind a red signal, dwelling at the
-platform and departing; the Tilley box fills with the crowd; signals and the
-street gateline change colour), an occupancy chart with anomaly markers, a
-flow-in/out chart, a live event feed, and the AI advisor's advice.
+platform and departing; the Tilley box fills with the crowd and shows live
+occupancy; signals and the street gateline change colour), an occupancy chart
+with anomaly markers, a flow-in/out chart, and a live event feed.
 
 Flip the **Rush Hour** toggle (top-right, red when on) to trigger a surge and
 watch the system react — as occupancy climbs the gateline **restricts** then
@@ -150,9 +205,9 @@ Confluent CFUs and the cluster cost money — always destroy after you're done.
 
 ## Running without the emulator (optional)
 
-`tools/mockfeed.py` publishes synthetic Avro to every topic (including a scripted
-surge and simplified control loops), so you can drive the dashboard without the
-emulator + Flink:
+`tools/mockfeed.py` publishes synthetic Avro to every topic (a scripted surge
+plus rough stand-ins for the metrics/anomaly/AI outputs), so you can drive the
+dashboard without the emulator + Flink:
 
 ```bash
 docker compose --profile mock up --build    # backend + mock feed
@@ -160,30 +215,34 @@ docker compose --profile mock up --build    # backend + mock feed
 
 ## Configuration
 
-Each setting lives in exactly one place:
+There is no separate config data file — everything is either an **env var** or a
+**Terraform variable**:
 
-| File | Holds |
+| Where | Holds |
 |---|---|
-| **`demo.config.json`** | shared domain constants — station capacity, evacuation flow, aggregation window, and the crowd thresholds. Read by both Terraform and the Python apps. |
-| **`.env`** (git-ignored) | secrets (Confluent/AWS keys) and app runtime knobs — passenger/train/surge rates, and `INITIAL_OCCUPANCY_FRACTION` (starting/RESET occupancy as a fraction of capacity, default `0.45`). Kafka + Schema Registry values are written here automatically by `terraform apply`. Plain `KEY=VALUE` lines. |
-| **`terraform/vars.tf`** (+ `terraform.tfvars`) | cloud infrastructure — region, cluster, compute units, retention, Bedrock model. |
+| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), the domain constants (`STATION_CAPACITY`, `AGG_WINDOW_SECONDS`, `PCT_LOW/HIGH/CRITICAL`, `STATION_NAME`), and the demo knobs (foot/train/surge rates, `INITIAL_OCCUPANCY_FRACTION`). Plain `KEY=VALUE` lines. |
+| **`terraform/vars.tf`** (+ optional `terraform.tfvars`) | Terraform's copy: cloud infra (region, cluster, CFUs, retention, Bedrock model) **and** the domain constants used to template the Flink SQL. |
 
-Change a threshold or the window once in `demo.config.json` and both the Flink
-SQL and the Python apps pick it up.
+The domain constants exist in both places by design, kept in step automatically:
+`terraform apply` resolves them from `vars.tf` and **writes them into `.env`**
+(along with the Kafka / Schema Registry connection details) via
+`terraform/write_env.sh`, so Flink and the Python apps always use the same
+numbers. Before you apply, the defaults in `.env_example` let the apps and tests
+run. Nothing is hard-coded in the Python source.
 
-> **Security note:** when the AI advisor is enabled, the Bedrock connection's AWS
-> keys are stored in Terraform state. `terraform.tfstate` is git-ignored — keep
-> it secure, or use an encrypted remote backend.
+> **Security note:** the Bedrock connection's AWS keys are stored in Terraform
+> state. `terraform.tfstate` is git-ignored — keep it secure, or use an encrypted
+> remote backend.
 
 ## How the pieces fit
 
 ```
 tube-station/
-├── demo.config.json       # single source of truth for shared domain constants
+├── .env_example           # template for .env — every runtime var lives here
 ├── Dockerfile             # one image: emulator, backend, or mock feed
 ├── docker-compose.yml     # runs the app layer
 ├── terraform/             # Confluent Cloud footprint + Flink SQL (terraform/sql/)
-├── emulator/              # Python passenger/train simulator (owns occupancy)
+├── emulator/              # Python passenger/train simulator (owns occupancy + controls)
 ├── backend/               # Flask + Socket.IO: streams topics to the browser
 ├── frontend/              # browser dashboard (served by the backend)
 └── tools/mockfeed.py      # synthetic data generator (run the UI without the cloud pipeline)

@@ -30,10 +30,6 @@ locals {
     "station_occupancy",
   ]
 
-  # Shared domain constants — single source of truth, read from the repo-root
-  # demo.config.json that the Python emulator/backend also read (no duplication).
-  demo = jsondecode(file("${path.module}/../demo.config.json"))
-
   # Bedrock invoke endpoint (region + model id). Reused by the connection and by
   # the model-version hash below so a region/model change rebuilds the model.
   #
@@ -62,18 +58,17 @@ locals {
   ])), 0, 8)
   model_name = "${var.ai_model_name}_${local.model_version_hash}"
 
-  # Constants injected into the Flink SQL templates. Domain values come from
-  # demo.config.json; ML/AI params stay in vars.tf (Flink-only).
+  # Constants injected into the Flink SQL templates. Domain values are Terraform
+  # variables (vars.tf) — Terraform's own copy. On apply, write_env.sh writes the
+  # resolved values into the repo-root .env so the Python apps use the same
+  # numbers (no shared data file). ML/AI params also live in vars.tf.
   sql_vars = {
-    station_name       = local.demo.station_name
-    station_capacity   = local.demo.station_capacity
-    window_seconds     = local.demo.agg_window_seconds
-    evacuation_flow    = local.demo.evacuation_flow
-    pct_low            = local.demo.pct_low
-    pct_high           = local.demo.pct_high
-    pct_critical       = local.demo.pct_critical
-    evac_warn          = local.demo.evac_warn
-    evac_crit          = local.demo.evac_crit
+    station_name       = var.station_name
+    station_capacity   = var.station_capacity
+    window_seconds     = var.agg_window_seconds
+    pct_low            = var.pct_low
+    pct_high           = var.pct_high
+    pct_critical       = var.pct_critical
     min_training_size  = var.min_training_size
     bedrock_connection = var.bedrock_connection_name
     model_name         = local.model_name
@@ -280,6 +275,13 @@ resource "terraform_data" "write_env" {
       EV_SCHEMA_REGISTRY_URL        = data.confluent_schema_registry_cluster.sr.rest_endpoint
       EV_SCHEMA_REGISTRY_API_KEY    = confluent_api_key.sr.id
       EV_SCHEMA_REGISTRY_API_SECRET = confluent_api_key.sr.secret
+      # Domain constants -> .env so the Python apps use the same numbers as Flink.
+      EV_STATION_NAME       = var.station_name
+      EV_STATION_CAPACITY   = tostring(var.station_capacity)
+      EV_AGG_WINDOW_SECONDS = tostring(var.agg_window_seconds)
+      EV_PCT_LOW            = tostring(var.pct_low)
+      EV_PCT_HIGH           = tostring(var.pct_high)
+      EV_PCT_CRITICAL       = tostring(var.pct_critical)
     }
   }
 }

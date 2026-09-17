@@ -22,7 +22,7 @@ STATION CONTEXT
 - Direction rule: eastbound trains arrive from the west (Overton) and depart to the east (Jones); westbound trains arrive from the east (Jones) and depart to the west (Overton).
 
 SAFETY PRINCIPLE
-- Prioritise crowd and platform-train-interface safety over service speed. Evacuation time is occupancy divided by evacuation flow; when it climbs, act. Treat closing entrances or calling British Transport Police as last resorts.
+- Prioritise crowd and platform-train-interface safety over service speed. As occupancy rises toward capacity, act. Treat closing entrances or calling British Transport Police as last resorts.
 - Remember trains are the drain: never recommend holding all trains when the station is near capacity, because waiting passengers can only leave by boarding. Cap inflow at the street gateline instead.
 
 OPERATIONAL TOOLKIT (select only the most relevant items; do not list them all)

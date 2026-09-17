@@ -21,19 +21,14 @@ const { useState, useEffect, useRef, useCallback } = React;
 // config + helpers
 // ---------------------------------------------------------------------------
 const DEFAULT_CFG = {
-  station_name: "Tilley Station", capacity: 1200, evacuation_flow: 3.5,
+  station_name: "Tilley Station", capacity: 1200,
   agg_window_seconds: 15, pct_low: 0.70, pct_high: 0.85, pct_critical: 0.95,
-  evac_warn: 360, evac_crit: 480, neighbour_west: "Overton Station",
-  neighbour_east: "Jones Station", surge_duration: 45,
+  neighbour_west: "Overton Station", neighbour_east: "Jones Station",
+  surge_duration: 45,
 };
 const DEMO = new URLSearchParams(location.search).has("demo");
 const clampArr = (a, n) => (a.length > n ? a.slice(a.length - n) : a);
 const hhmmss = (ms) => new Date(ms).toLocaleTimeString();
-const mmss = (s) => {
-  s = Math.max(0, Math.round(s));
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
-};
 
 function zoneColor(pct, cfg) {
   if (pct >= cfg.pct_critical) return "var(--critical)";
@@ -41,43 +36,6 @@ function zoneColor(pct, cfg) {
   if (pct >= cfg.pct_low) return "var(--amber)";
   return "var(--green)";
 }
-function evacColor(evac, cfg) {
-  if (evac >= cfg.evac_crit) return "var(--red)";
-  if (evac >= cfg.evac_warn) return "var(--amber)";
-  return "var(--green)";
-}
-
-// ---------------------------------------------------------------------------
-// Safety panel
-// ---------------------------------------------------------------------------
-function Safety({ occupancy, capacity, cfg }) {
-  const evac = occupancy / cfg.evacuation_flow;
-  const pct = capacity ? occupancy / capacity : 0;
-  return (
-    <div className="panel area-safety">
-      <h2>Platform safety</h2>
-      <div className="safety-grid">
-        <div className="stat">
-          <div className="label">Evacuation time</div>
-          <div className="value" style={{ color: evacColor(evac, cfg) }}>{mmss(evac)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Occupancy</div>
-          <div className="value" style={{ color: zoneColor(pct, cfg) }}>{Math.round(pct * 100)}<small>%</small></div>
-        </div>
-        <div className="stat">
-          <div className="label">Inside now</div>
-          <div className="value">{occupancy}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Capacity</div>
-          <div className="value">{capacity}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Animated station strip
 // ---------------------------------------------------------------------------
@@ -208,13 +166,6 @@ function StationStrip({ trains, signals, gateline, occupancy, capacity, cfg, now
           return trains.map((t) => <Train key={t.sid} t={t} now={now} queueIndex={q.get(t.sid) || 0} />);
         })()}
       </svg>
-      <div className="legend">
-        <span><i className="dot" style={{ background: "var(--east)" }}></i>east-bound →</span>
-        <span><i className="dot" style={{ background: "var(--west)" }}></i>← west-bound</span>
-        <span><i className="dot" style={{ background: glColor }}></i>gateline {gl}</span>
-        <span><i className="dot" style={{ background: signals.LEFT === "RED" ? "var(--red)" : "var(--green)" }}></i>LEFT {signals.LEFT}</span>
-        <span><i className="dot" style={{ background: signals.RIGHT === "RED" ? "var(--red)" : "var(--green)" }}></i>RIGHT {signals.RIGHT}</span>
-      </div>
     </div>
   );
 }
@@ -310,21 +261,24 @@ function EventFeed({ items }) {
 }
 
 function AIFeed({ items }) {
-  const a = items[0]; // latest advice only — a compact full-width banner
-  const line = (label, text) => text ? <div className="line"><b>{label}:</b> {text}</div> : null;
+  // Scrollable advice history, newest first (App prepends). The title stays put;
+  // only the list scrolls, showing ~5 lines at a time.
+  const line = (label, text) => text ? <div className="ai-line"><b>{label}:</b> {text}</div> : null;
   return (
     <div className="panel area-ai">
       <h2>AI supervisor advice</h2>
-      {!a && <div className="empty">No advice yet — trigger a rush hour to see the advisor act.</div>}
-      {a && (
-        <div className={`ai-card ${a.severity}`}>
-          <span className={`ai-chip ${a.severity}`}>{a.severity}</span>
-          <span className="ai-time">{hhmmss(a.ts)} · {a.trigger}</span>
-          {line("Assessment", a.assessment)}
-          {line("Actions", a.actions)}
-          {line("Watch", a.watch)}
-        </div>
-      )}
+      <div className="ai-scroll">
+        {items.length === 0 && <div className="empty">No advice yet — trigger a rush hour to see the advisor act.</div>}
+        {items.map((a, i) => (
+          <div key={i} className={`ai-card ${a.severity}`}>
+            <span className={`ai-chip ${a.severity}`}>{a.severity}</span>
+            <span className="ai-time">{hhmmss(a.ts)} · {a.trigger}</span>
+            {line("Assessment", a.assessment)}
+            {line("Actions", a.actions)}
+            {line("Watch", a.watch)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -466,7 +420,6 @@ function App() {
 
       <main>
         <AIFeed items={ai} />
-        <Safety occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} />
         <StationStrip trains={trainList} signals={signals} gateline={gateline}
           occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} now={now} />
         <div className="panel area-chartA">
@@ -505,8 +458,8 @@ function startDemo(handle, setRush) {
   };
   // Deterministic gateline (occupancy bands) + anomaly-filtered advisory AI.
   const controls = () => {
-    const pct = occ / cap, evac = occ / cfg.evacuation_flow;
-    let g = pct >= cfg.pct_critical || evac >= cfg.evac_crit ? "CLOSED" : pct >= cfg.pct_high || evac >= cfg.evac_warn ? "RESTRICTED" : "OPEN";
+    const pct = occ / cap;
+    let g = pct >= cfg.pct_critical ? "CLOSED" : pct >= cfg.pct_high ? "RESTRICTED" : "OPEN";
     if (g !== gate) { gate = g; handle("gateline", { station_name: cfg.station_name, state: g, throttle_factor: g === "CLOSED" ? 0 : g === "RESTRICTED" ? 0.4 : 1, reason: `Occupancy ${Math.round(pct*100)}%`, event_time: now() }); }
     if (pct >= cfg.pct_high && !aiEpisode) {
       aiEpisode = true;
@@ -554,7 +507,7 @@ function startDemo(handle, setRush) {
   };
   const metrics = () => {
     const pct = occ / cap;
-    handle("metrics", { window_start: now(), window_end: now(), foot_in: rnd(40, 120), alight_wait: rnd(10, 60), alight_exit: rnd(20, 80), alight_total: rnd(30, 120), board_total: rnd(30, 100), net_change: rnd(-20, 40), occupancy: occ, occupancy_pct: pct, evac_time: occ / cfg.evacuation_flow });
+    handle("metrics", { window_start: now(), window_end: now(), foot_in: rnd(40, 120), alight_wait: rnd(10, 60), alight_exit: rnd(20, 80), alight_total: rnd(30, 120), board_total: rnd(30, 100), net_change: rnd(-20, 40), occupancy: occ, occupancy_pct: pct });
   };
   emitOcc();
   const iv = [setInterval(foot, 1500), setInterval(spawn, 3500), setInterval(metrics, 4000)];

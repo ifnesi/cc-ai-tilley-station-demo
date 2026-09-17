@@ -80,14 +80,11 @@ class MockFeed:
         self.cfg = config
         self.rng = random.Random(seed)
         self.capacity = ref.STATION_CAPACITY
-        self.evac_flow = ref.EVACUATION_FLOW
 
         # thresholds
         self.pct_low = 0.70
         self.pct_high = 0.85
         self.pct_critical = 0.95
-        self.evac_warn = 360.0
-        self.evac_crit = 480.0
 
         # generation rates
         self.foot_min, self.foot_max = 1, 40
@@ -265,7 +262,6 @@ class MockFeed:
         alight_total = w.alight_wait + w.alight_exit
         occ = max(0, self.occupancy)
         occ_pct = occ / self.capacity
-        evac = occ / self.evac_flow
         self._emit(
             "station_metrics",
             {
@@ -284,7 +280,6 @@ class MockFeed:
                 "net_change": w.foot_in + w.alight_wait - w.board_total,
                 "occupancy": occ,
                 "occupancy_pct": occ_pct,
-                "evac_time": evac,
             },
         )
         self._detect_anomaly("foot_in", w.foot_in, w.start)
@@ -321,7 +316,6 @@ class MockFeed:
     def _run_controls(self) -> None:
         occ = max(0, self.occupancy)
         pct = occ / self.capacity
-        evac = occ / self.evac_flow
 
         # --- signal loop, both sides, emit on change ---------------
         for side in ("LEFT", "RIGHT"):
@@ -354,9 +348,9 @@ class MockFeed:
                     self._maybe_ai("threshold", "occupancy_pct")
 
         # --- gateline loop, emit on change -------------------------
-        if pct >= self.pct_critical or evac >= self.evac_crit:
+        if pct >= self.pct_critical:
             g, thr, reason = "CLOSED", 0.0, f"CRITICAL {pct:.0%}: closing street gateline"
-        elif pct >= self.pct_high or evac >= self.evac_warn:
+        elif pct >= self.pct_high:
             g, thr, reason = "RESTRICTED", 0.4, f"Occupancy {pct:.0%} over HIGH: restricting inflow"
         else:
             g, thr, reason = "OPEN", 1.0, f"Occupancy {pct:.0%} nominal: gateline open"

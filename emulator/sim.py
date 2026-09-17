@@ -57,7 +57,6 @@ class Simulator:
         self.clock = _VirtualClock()
         self.state = StationState(
             capacity=config.capacity,
-            evacuation_flow=config.evacuation_flow,
             initial_occupancy=config.initial_occupancy,
             clock=self.clock,
         )
