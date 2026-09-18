@@ -93,6 +93,17 @@ flowchart LR
   J7 <-->|ML_PREDICT| BR
 ```
 
+Each statement lives in `terraform/sql/` and is deployed by `terraform apply`:
+
+| Statement | What it's for | Inputs | What it does | Output |
+|---|---|---|---|---|
+| **`01_metrics.sql`** | Windowed crowd metrics | `passengers_flow`, `train_in_station`, `train_in_transit`, `station_occupancy` | `UNION ALL`s the four raw streams into one normalised stream, then a single `TUMBLE` aggregation (`agg_window_seconds`, 5s) — foot-in, alighting/boarding totals (and per-direction), net change, latest occupancy + `occupancy_pct`. | `station_metrics` |
+| **`02_anomalies.sql`** | ML anomaly detection (the filter) | `station_metrics` | Runs `ML_DETECT_ANOMALIES` over `foot_in` and `alight_total` in an unbounded `OVER` window, partitioned by station; keeps only rows flagged `is_anomaly`, carrying occupancy context through. | `station_anomalies` |
+| **`05_ai_model.sql`** | Register the alert advisor model | none — defines a model, reads no topic | `CREATE MODEL` for a Bedrock text-generation model (`ops_advisor`) with the four-line `SEVERITY/ASSESSMENT/ACTIONS/WATCH` system prompt and a ~20-action LU toolkit. | Flink model `ops_advisor` |
+| **`05b_qa_model.sql`** | Register the Ask-AI model | none — defines a model, reads no topic | `CREATE MODEL` for a second, conversational Bedrock model (`ops_qa`) that answers a free-text supervisor question from live context (Markdown, ~120 words). | Flink model `ops_qa` |
+| **`06_ai_suggestions.sql`** | GenAI advisor | `station_anomalies`, `station_metrics` | `UNION ALL`s two triggers — any anomaly, and occupancy band step-ups/HIGH-CRITICAL re-fires — builds a prompt with live context, and calls `ML_PREDICT` on `ops_advisor`; parses out `severity`. | `station_ai_suggestions` |
+| **`07_operator_qa.sql`** | Ask-AI (on demand) | `operator_questions` (with a backend-snapshotted context) | Builds a prompt from the (length-capped) question + context and calls `ML_PREDICT` on `ops_qa`, correlated by `question_id`. Append-only, no join. | `operator_answers` |
+
 The same chain, live in Confluent Cloud's Stream Lineage:
 
 ![Stream Lineage](docs/cluster-lkc-mvpko0q-lineage.png)
