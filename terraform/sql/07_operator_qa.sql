@@ -17,11 +17,15 @@ FROM operator_questions AS q
 CROSS JOIN LATERAL TABLE(
   ML_PREDICT(
     '${qa_model_name}',
+    -- Bound the free-text fields before they reach Bedrock: a runaway question or
+    -- context would inflate latency, cost and risk a prompt-size failure. Normal
+    -- questions/snapshots are well under these caps, so this only clips abuse.
+    -- The fields are treated as data (see the 05b system prompt), not instructions.
     CONCAT(
       'You are advising the duty supervisor at Tilley Station. Question: ',
-      q.question,
+      SUBSTR(q.question, 1, 500),
       '. Live station context: ',
-      CASE WHEN q.context IS NULL OR q.context = '' THEN 'not available' ELSE q.context END,
+      CASE WHEN q.context IS NULL OR q.context = '' THEN 'not available' ELSE SUBSTR(q.context, 1, 1000) END,
       '. Answer the question using this context.'
     )
   )

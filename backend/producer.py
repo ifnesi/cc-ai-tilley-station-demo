@@ -161,7 +161,14 @@ class QuestionProducer:
         record = build_operator_question(question, station_name, context, question_id)
         ctx = SerializationContext(self._topic, MessageField.VALUE)
         value = self._serializer(record, ctx)
-        self._producer.produce(self._topic, value=value)
+        # Key by question_id so all records for one question land on the same
+        # partition and correlation/dedup is straightforward. The topic has no key
+        # schema (Terraform registers only <topic>-value), so a plain UTF-8 string
+        # key is correct. Note: a producer/user retry can still emit a second
+        # question with the SAME id, which Flink (07) answers again — each answer is
+        # forwarded on the 'operator_answer' Socket.IO channel and the frontend
+        # correlates it back to the pending question by question_id.
+        self._producer.produce(self._topic, key=record["question_id"], value=value)
         self._producer.flush(5)
         log.info("Produced operator_question %s", record["question_id"])
         return record

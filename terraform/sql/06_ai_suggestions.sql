@@ -6,8 +6,12 @@
 --   A) ANOMALY episodes — consumed straight from station_anomalies, the output of
 --      02 (the single place ML_DETECT_ANOMALIES runs). Each anomalous window is
 --      worth advising on, and 02 is windowed so this is at most ~1 per 15s.
---   B) OCCUPANCY band step-ups — from the windowed station_metrics, debounced on
---      the band (LAG), so a plateau just above 85% does not re-fire every window.
+--   B) OCCUPANCY bands — from the windowed station_metrics. Two intentional
+--      cadences (see the WHERE below): a step UP into BUSY (70%) fires once and is
+--      then debounced on the band (LAG), so a BUSY plateau does not re-fire; but
+--      HIGH (85%) and CRITICAL (95%) — band >= 2 — deliberately re-fire EVERY
+--      window as a running reminder while the station is in trouble. This is a
+--      cadence policy, not pure debouncing, and keeps the advice live during a surge.
 --
 -- Both anomaly and threshold advice reach the ops team; the anomaly ones add to
 -- the occupancy-driven ones. ML_PREDICT + task=text_generation matches the
@@ -51,7 +55,16 @@ threshold_trig AS (
     'threshold' AS `trigger`,
     'occupancy_pct' AS metric,
     CAST(occupancy AS DOUBLE) AS actual,
-    ${pct_high} * CAST(${station_capacity} AS DOUBLE) AS forecast,
+    -- "Expected around" for a threshold trigger is the headcount at the band the
+    -- event actually crossed, not always pct_high — so the prompt context matches
+    -- the severity (BUSY/HIGH/CRITICAL) instead of implying an 85% baseline.
+    CAST(
+      CASE band
+        WHEN 3 THEN ${pct_critical}
+        WHEN 2 THEN ${pct_high}
+        ELSE ${pct_low}
+      END * ${station_capacity} AS DOUBLE
+    ) AS forecast,
     occupancy,
     pct,
     event_time
@@ -105,7 +118,14 @@ prompted AS (
 SELECT
   p.`trigger`,
   p.metric,
-  UPPER(COALESCE(NULLIF(REGEXP_EXTRACT(m.suggestion, 'SEVERITY: *([A-Za-z]+)', 1), ''), 'MEDIUM')) AS severity,
+  -- Constrain the parsed severity to the known enum. REGEXP_EXTRACT can return any
+  -- alphabetic token after 'SEVERITY:', so map anything unexpected to MEDIUM rather
+  -- than let a stray word (or empty match) flow downstream to the dashboard.
+  CASE UPPER(COALESCE(NULLIF(REGEXP_EXTRACT(m.suggestion, 'SEVERITY: *([A-Za-z]+)', 1), ''), 'MEDIUM'))
+    WHEN 'LOW' THEN 'LOW'
+    WHEN 'HIGH' THEN 'HIGH'
+    ELSE 'MEDIUM'
+  END AS severity,
   m.suggestion,
   p.event_time
 FROM prompted AS p

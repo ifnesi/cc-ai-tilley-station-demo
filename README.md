@@ -97,7 +97,8 @@ Read left to right, it tells the whole Flink story:
 
 1. **Stream processing**, `01` fans four raw event streams into one and runs a
    single tumbling-window aggregation (`TUMBLE`) into `station_metrics`: crowd
-   counts per window (~10s), continuously.
+   counts per window (the `agg_window_seconds` tumble, 5s by default),
+   continuously.
 2. **Built-in ML**, `02` runs `ML_DETECT_ANOMALIES` over that windowed stream
    (the single place the anomaly ML runs). Only genuinely abnormal crowd spikes
    flow into `station_anomalies`, which feeds **both** the dashboard (the red
@@ -105,10 +106,13 @@ Read left to right, it tells the whole Flink story:
 3. **GenAI advisor**, `06` calls `ML_PREDICT` against a Bedrock model (`05`
    registers it, with a ~20-action London-Underground toolkit) to write
    `station_ai_suggestions`, concrete guidance for the ops team. It fires from
-   two sources: **any anomaly** on `station_anomalies`, **and** occupancy
-   *stepping up* a band on `station_metrics`, BUSY (70%, an early warning), HIGH
-   (85%), or CRITICAL (95%). It never fires per raw event, so the expensive AI
-   stays cheap, and the advice scales from early warning to crisis.
+   two sources: **any anomaly** on `station_anomalies`, **and** occupancy bands on
+   `station_metrics`. The band cadence is deliberate: a step *up* into BUSY (70%,
+   an early warning) fires once and is then debounced on a plateau, while HIGH
+   (85%) and CRITICAL (95%) re-fire **every window** as a running reminder while
+   the station is in trouble. It never fires per raw event, so the expensive AI
+   stays cheap, and the advice scales from a one-off early warning to continuous
+   crisis guidance during a surge.
 4. **GenAI on demand**, `07` powers the **Ask-AI** feature: a supervisor
    question lands on `operator_questions` with a live-context snapshot the backend
    took from its metrics/anomaly consumers; `07` sends it to a second Bedrock
@@ -124,14 +128,14 @@ The Kafka topics that power the demo:
 
 | Topic | Purpose |
 |-------|---------|
-| **passengers_flow** | Raw passenger entry/exit events from turnstiles and train doors. |
-| **train_in_transit** | Trains approaching the station, including passenger count and ETA. |
-| **train_in_station** | Trains currently at the platform, boarding/alighting passenger counts. |
-| **station_occupancy** | Real-time headcount; aggregated from turnstiles and train sensors. |
+| **passengers_flow** | Raw street-entry passenger events (already throttled by the gateline). |
+| **train_in_transit** | Trains approaching (with passenger count + ETA) or departing (carrying `passengers_boarding`). |
+| **train_in_station** | Trains dwelling at the platform, with the alighting splits; boarding is recorded on the departing `train_in_transit` event. |
+| **station_occupancy** | Authoritative occupancy heartbeat emitted by the emulator (guaranteed never negative). |
 | **signal_state** | Block signalling state (RED when train dwells, GREEN when clear). |
 | **gateline_state** | Street gateline control state (OPEN, RESTRICTED, or CLOSED based on occupancy). |
 | **demo_control** | Control events triggered by the presenter (e.g., surge toggles). |
-| **station_metrics** | Aggregated 10-second windows: foot counts, alighting, boarding, occupancy bands. |
+| **station_metrics** | Aggregated tumbling windows (`agg_window_seconds`, 5s by default): foot counts, alighting, boarding, occupancy bands. |
 | **station_anomalies** | Detected anomalies flagged by `ML_DETECT_ANOMALIES` (crowd spikes). |
 | **station_ai_suggestions** | AI advisor guidance triggered by anomalies or occupancy thresholds. |
 | **operator_questions** | Free-form questions from operators asking about live station state. |

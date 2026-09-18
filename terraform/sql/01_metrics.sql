@@ -82,7 +82,19 @@ SELECT
   CAST(SUM(board_east) AS INT) AS board_east,
   CAST(SUM(board_west) AS INT) AS board_west,
   CAST(SUM(foot_in) + SUM(alight_wait) - SUM(board_total) AS INT) AS net_change,
+  -- occupancy is a level, not a sum. LAST_VALUE(occ) is an approximate-latest
+  -- within the window; the MAX(occ) fallback is highest-not-latest, but with a
+  -- heartbeat ~every 1s into a 5s window (~5 samples) and occupancy moving
+  -- slowly, the two differ by a few passengers at most. Intentional for the demo.
   CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS INT) AS occupancy,
-  CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS DOUBLE) / NULLIF(CAST(MAX(cap) AS DOUBLE), 0) AS occupancy_pct
+  -- occupancy_pct is a non-nullable Avro double. A window with no occupancy
+  -- heartbeat (idle-partition / watermark edge case) makes MAX(cap) NULL, so
+  -- NULLIF -> NULL -> a NULL division result that the sink would reject. COALESCE
+  -- to 0.0 keeps the contract non-null (occupancy is 0 in that same window).
+  COALESCE(
+    CAST(COALESCE(LAST_VALUE(occ), MAX(occ), 0) AS DOUBLE)
+    / NULLIF(CAST(MAX(cap) AS DOUBLE), 0),
+    0.0
+  ) AS occupancy_pct
 FROM TABLE(TUMBLE(TABLE unified, DESCRIPTOR(ts), INTERVAL '${window_seconds}' SECOND))
 GROUP BY window_start, window_end, station_name;
