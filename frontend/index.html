@@ -334,6 +334,43 @@ function parseSuggestion(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Latest-anomaly tile. station_anomalies only carries is_anomaly=TRUE rows (the
+// 02 Flink job filters them), so every "anomaly" message is a real one. The
+// occupancy chart shows them as red dots; this tile keeps the most recent one
+// legible: which metric, observed vs expected, the model's normal band, and when.
+// ---------------------------------------------------------------------------
+const METRIC_LABEL = { foot_in: "Foot entries", alight_total: "Alighting", occupancy_pct: "Occupancy" };
+const agoStr = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + "s ago";
+  return Math.floor(s / 60) + "m " + (s % 60) + "s ago";
+};
+
+function AnomalyTile({ anom, count }) {
+  return (
+    <div className="panel area-anom anomaly-tile">
+      <h2>Latest anomaly{count ? <span className="anom-count">{count} this session</span> : null}</h2>
+      {!anom ? (
+        <div className="empty">No anomalies detected yet — ML_DETECT_ANOMALIES is watching foot entries and alighting.</div>
+      ) : (
+        <div className="anom-body">
+          <div className="anom-metric"><span className="anom-dot"></span>{METRIC_LABEL[anom.metric] || anom.metric}</div>
+          <div className="anom-nums">
+            <div><span className="anom-k">Observed</span><span className="anom-v">{Math.round(anom.actual)}</span></div>
+            <div><span className="anom-k">Expected</span><span className="anom-v">~{Math.round(anom.forecast)}</span></div>
+            <div><span className="anom-k">Normal band</span><span className="anom-v">{Math.round(anom.lower_bound)}–{Math.round(anom.upper_bound)}</span></div>
+            {anom.occupancy_pct != null && (
+              <div><span className="anom-k">Occupancy</span><span className="anom-v">{Math.round(anom.occupancy_pct * 100)}%</span></div>
+            )}
+          </div>
+          <div className="anom-time">{hhmmss(anom.ts)} · {agoStr(Date.now() - anom.ts)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Ask-AI tab — full Q&A history + a bottom input.
 // Each question -> Kafka -> Flink (+ live context) -> Bedrock -> answer.
 // ---------------------------------------------------------------------------
@@ -392,6 +429,8 @@ function App() {
   const [gateline, setGateline] = useState({ state: "OPEN", throttle_factor: 1 });
   const [feed, setFeed] = useState([]);
   const [ai, setAi] = useState([]);
+  const [anom, setAnom] = useState(null);
+  const [anomCount, setAnomCount] = useState(0);
   const [rush, setRush] = useState(false);
   const [now, setNow] = useState(performance.now());
   const [tab, setTab] = useState("dashboard");
@@ -415,6 +454,8 @@ function App() {
       setFlowHist((h) => clampArr([...h, { ts: Date.now(), foot_in: p.foot_in, alight_wait: p.alight_wait, board_total: p.board_total }], 60));
     } else if (channel === "anomaly") {
       setOccHist((h) => { if (!h.length) return h; const n = h.slice(); n[n.length - 1] = { ...n[n.length - 1], anomaly: true }; return n; });
+      setAnom({ ts: Date.now(), metric: p.metric, actual: p.actual, forecast: p.forecast, lower_bound: p.lower_bound, upper_bound: p.upper_bound, occupancy: p.occupancy, occupancy_pct: p.occupancy_pct });
+      setAnomCount((n) => n + 1);
       pushFeed("signal", `ANOMALY on ${p.metric}: ${Math.round(p.actual)} vs ~${Math.round(p.forecast)}`);
     } else if (channel === "signal") {
       setSignals((s) => ({ ...s, [p.side]: p.state }));
@@ -563,6 +604,7 @@ function App() {
           <AIFeed items={ai} />
           <StationStrip trains={trainList} signals={signals} gateline={gateline}
             occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} now={now} />
+          <AnomalyTile anom={anom} count={anomCount} />
           <div className="panel area-chartA">
             <h2>Occupancy over time</h2>
             <OccupancyChart hist={occHist} capacity={occ.capacity} />

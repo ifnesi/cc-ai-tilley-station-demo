@@ -52,6 +52,7 @@ main {
   grid-template-areas:
     "ai     ai     ai     ai     ai     ai     ai     ai     ai     ai"
     "feed   feed   feed   strip  strip  strip  strip  strip  strip  strip"
+    "anom   anom   anom   anom   anom   anom   anom   anom   anom   anom"
     "chartA chartA chartA chartA chartA chartB chartB chartB chartB chartB";
   max-width: 1600px; margin: 0 auto;
 }
@@ -62,11 +63,12 @@ main {
       "ai ai"
       "strip strip"
       "feed feed"
+      "anom anom"
       "chartA chartB";
   }
 }
 @media (max-width: 720px) {
-  main { grid-template-columns: 1fr; grid-template-areas: "ai" "strip" "feed" "chartA" "chartB"; }
+  main { grid-template-columns: 1fr; grid-template-areas: "ai" "strip" "feed" "anom" "chartA" "chartB"; }
 }
 
 .panel {
@@ -82,6 +84,20 @@ main {
 .area-chartB { grid-area: chartB; }
 .area-feed { grid-area: feed; }
 .area-ai { grid-area: ai; }
+.area-anom { grid-area: anom; }
+
+/* ---------- latest-anomaly tile ---------- */
+.anomaly-tile .anom-count { color: #6e7681; font-size: 10px; font-weight: 700; margin-left: 10px; letter-spacing: .04em; }
+.anom-body { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.anom-metric { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 800; color: var(--text); flex: none; }
+.anom-dot { width: 10px; height: 10px; border-radius: 999px; background: #ff2d55; box-shadow: 0 0 0 4px rgba(255,45,85,.18); flex: none; }
+/* the value groups take the space between the metric (left) and time (right)
+   and spread evenly across it, each column centred on itself */
+.anom-nums { display: flex; flex: 1; justify-content: space-evenly; gap: 24px; flex-wrap: wrap; }
+.anom-nums > div { display: flex; flex-direction: column; gap: 3px; align-items: center; text-align: center; }
+.anom-k { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.anom-v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.anom-time { flex: none; color: #6e7681; font-size: 12px; font-variant-numeric: tabular-nums; }
 
 /* ---------- station strip ---------- */
 .area-strip svg { width: 100%; height: auto; display: block; }
