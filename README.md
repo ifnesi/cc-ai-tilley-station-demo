@@ -93,6 +93,14 @@ flowchart LR
   J7 <-->|ML_PREDICT| BR
 ```
 
+The same chain, live in Confluent Cloud's Stream Lineage:
+
+![Stream Lineage](docs/cluster-lkc-mvpko0q-lineage.png)
+
+...and the Flink SQL statements that drive it, deployed by `terraform apply`:
+
+![Flink SQL statements](docs/flink-statements.png)
+
 Read left to right, it tells the whole Flink story:
 
 1. **Stream processing**, `01` fans four raw event streams into one and runs a
@@ -125,6 +133,8 @@ streaming ML, and AI inference, on the operational event stream.
 ## Topics
 
 The Kafka topics that power the demo:
+
+![Kafka topics](docs/kafka-topics.png)
 
 | Topic | Purpose |
 |-------|---------|
@@ -205,6 +215,8 @@ platform and departing; the Tilley box fills with the crowd and shows live
 occupancy; signals and the street gateline change colour), an occupancy chart
 with anomaly markers, a flow-in/out chart, and a live event feed.
 
+![Dashboard](docs/frontend-dashboard.png)
+
 Flip the **Rush Hour** toggle (top-right, red when on) to trigger a surge and
 watch the system react, as occupancy climbs the gateline **restricts** then
 **closes** to cap street inflow, `ML_DETECT_ANOMALIES` flags the spike, and the
@@ -217,6 +229,8 @@ Switch to the **Ask AI** tab (top of the page) to ask ad-hoc questions: it keeps
 the full question/answer history with timestamps and a text box at the bottom.
 Each question is enriched with the live station context and answered by Bedrock,
 while the **Dashboard** tab keeps running in the background.
+
+![Ask AI tab](docs/frontend-ask-ai.png)
 
 Stop with `Ctrl-C`, or `docker compose down`. (Re-run with `--build` whenever you
 change the frontend, since it's baked into the image.)
@@ -294,6 +308,8 @@ claude
 
 Approve `cc-managed-mcp` on first run, then ask, e.g.:
 > *"Using cc-managed-mcp, list the topics and summarise the latest station_metrics and station_anomalies."*
+
+![Claude Code querying the live data over the Confluent managed MCP](docs/claude-mcp-confluent.png)
 
 ## Running without the emulator (optional)
 
