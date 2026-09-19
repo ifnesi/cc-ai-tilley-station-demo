@@ -6,24 +6,29 @@ station, **Tilley**, on one line between two neighbours: **Overton** (west) and
 **Jones** (east).
 
 Passengers pour into Tilley from the street and from arriving trains. The
-station runs its own **deterministic operational controls**, block signalling
-(a train holds the platform, the next one queues at a red) and an occupancy-based
-street gateline. On top of that operational event stream, **Confluent Cloud
-provides the intelligence**: real-time crowd metrics, ML anomaly detection, and a
-**GenAI advisor** that turns anomalies into plain-English guidance for the duty
-supervisor, continuously and with the latency/correctness trade-offs described
-below.
+station runs its own **deterministic operational controls**: block signalling
+(a train holds the platform and the next one queues at a red signal) and an
+occupancy-based street gateline. These rules are immediate, testable, and do not
+depend on a model call. On top of that operational event stream, **Confluent
+Cloud provides real-time intelligence**: windowed crowd metrics, ML anomaly
+detection, bounded AI advice, and operator Q&A.
 
-That separation is the point: control that *should* be deterministic stays
-deterministic; the streaming platform adds observability, ML, and AI-assisted
-decision support. The tube theme is just the vehicle. What it demonstrates:
+The central design choice is deliberate: **operational safety does not depend on
+GenAI**. Software applies the rules the station already knows; AI is reserved for
+the work that benefits from language and judgement—explaining an unusual
+situation, prioritising proportionate human actions, and answering questions
+from live context. The AI can advise the duty supervisor, but it cannot change a
+signal, close a gateline, or otherwise actuate the station.
+
+The tube theme is the vehicle for demonstrating:
 
 - **Apache Kafka** as the backbone every event flows through.
 - **Apache Flink (SQL)** for real-time windowed metrics and stream processing.
-- **Flink built-in ML** (`ML_DETECT_ANOMALIES`) spotting abnormal crowd spikes —
-  the filter that decides which events are worth escalating.
+- **Flink built-in ML** (`ML_DETECT_ANOMALIES`) spotting abnormal crowd spikes,
+  so routine telemetry does not reach the generative model.
 - **Flink AI inference** (`ML_PREDICT` on **AWS Bedrock**, Claude Sonnet) turning
-  those anomalies into plain-English operational advice for the ops/safety team.
+  anomaly episodes and meaningful occupancy-band transitions into plain-English
+  operational advice for the ops/safety team.
 - **Deterministic operational control in the emulator** (block signalling +
   gateline), a clean separation from the analytics/AI, published to Kafka so it
   is part of the same event-driven stream.
@@ -34,19 +39,85 @@ decision support. The tube theme is just the vehicle. What it demonstrates:
   Confluent Cloud's managed MCP server, so **Claude Code** can connect and ask
   questions about the live station data (read-only).
 
+## Where AI belongs—and where it does not
+
+This demo uses the smallest appropriate tool for each decision:
+
+| Responsibility | Mechanism | Why |
+|---|---|---|
+| Keep one train per platform and hold the next at red | Deterministic emulator rule | This is a known invariant. It must be fast, repeatable, and available without an external model. |
+| Restrict or close street entry at known occupancy bands | Deterministic emulator rule | The threshold and action are explicit safety policy, so a model adds uncertainty without adding value. |
+| Calculate crowd flow and occupancy windows | Flink SQL | The calculation is exact, stateful stream processing. |
+| Identify statistically unusual footfall or alighting | `ML_DETECT_ANOMALIES` in Flink | ML finds patterns that are less useful to express as fixed thresholds, while still producing a structured, bounded signal. |
+| Turn a significant event into a concise assessment and proportionate staff actions | `ML_PREDICT` through Flink to Bedrock | This is where language synthesis and contextual judgement help a human operator. |
+| Answer an operator's ad-hoc question from current station context | On-demand `ML_PREDICT` | The question is unstructured and benefits from a natural-language response grounded in live data. |
+
+The result is a layered system rather than an AI-controlled station:
+
+1. **Rules protect the station.** They keep operating if Bedrock is slow or
+   unavailable.
+2. **Flink turns events into signal.** Deterministic aggregation and anomaly
+   detection reduce a busy stream to meaningful triggers.
+3. **AI explains and recommends.** Calls are limited to new anomaly episodes,
+   upward occupancy-band transitions, and explicit operator questions.
+4. **People remain accountable.** The duty supervisor receives advice and
+   decides what additional operational action to take.
+
+AI is therefore event-driven rather than placed in the hot path. The system
+does not call Bedrock for every passenger event, train movement, or metrics
+window. Advisor calls occur only when a new anomaly episode opens or occupancy
+steps into a higher band; Ask-AI calls occur only when an operator submits a
+question. Cooldowns, context-age limits, timeouts, retries, parallelism limits,
+and per-client Ask-AI throttling keep inference bounded. This reduces cost and
+noise while keeping model latency and availability outside the safety loop.
+
 ## Architecture
 
-![Architecture Diagram](docs/architecture-diagram.png)
-
 **The flow:** the emulator is the single source of truth for occupancy
-(guaranteed never negative) and for the operational controls, it runs block
-signalling and the gateline **deterministically**, and publishes everything
-(raw events + `signal_state` + `gateline_state`) to Kafka. Flink is **analytics
-only**: it aggregates the stream into windowed metrics, uses `ML_DETECT_ANOMALIES`
-to filter for genuinely abnormal crowd events, and calls Bedrock (`ML_PREDICT`)
-to turn those into advice for staff, it does **not** control the station. The
-browser sees everything live over WebSockets, and the presenter can trigger a
-crowd surge on demand (`demo_control`).
+(guaranteed never negative) and operational control state. It runs block
+signalling and the gateline **deterministically**, then publishes the raw events
+and resulting `signal_state` / `gateline_state` to Kafka. Flink observes that
+event stream: it calculates windowed metrics, identifies anomaly episodes and
+occupancy-band transitions, and invokes Bedrock (`ML_PREDICT`) only for advice.
+There is no path from an AI response back into either control loop. The browser
+receives every stage over WebSockets, and the presenter can inject a temporary
+crowd surge through `demo_control`.
+
+```mermaid
+flowchart LR
+  subgraph control[Deterministic operational layer]
+    E[Station emulator] --> R{Known station rules}
+    R --> S[Signal state]
+    R --> G[Gateline state]
+  end
+
+  subgraph insight[Streaming intelligence layer]
+    K[(Kafka topics)] --> F[Flink SQL metrics]
+    F --> M[Anomalies + band transitions]
+    M --> A[Bedrock advice]
+    A --> H[Duty supervisor]
+  end
+
+  E --> K
+  S --> K
+  G --> K
+
+  classDef safe fill:#173b2a,stroke:#56d364,color:#f0fff4;
+  classDef stream fill:#152c45,stroke:#58a6ff,color:#eff7ff;
+  classDef advise fill:#443113,stroke:#e3b341,color:#fff8e8;
+  class R,S,G safe;
+  class K,F,M stream;
+  class A,H advise;
+```
+
+The one-way boundary into the advisory layer is an important part of the demo:
+AI failure can delay an explanation, but it cannot delay a red signal or a
+gateline restriction.
+
+The detailed deployment topology, including Kafka topics, RTCE, managed MCP,
+and the local application layer:
+
+![Architecture Diagram](docs/architecture-diagram.png)
 
 ## The Flink pipeline, where the power is
 
@@ -102,7 +173,7 @@ Each statement lives in `terraform/sql/` and is deployed by `terraform apply`:
 | **[`02_anomalies.sql`](terraform/sql/02_anomalies.sql)** | ML anomaly detection (the filter) | `station_metrics` | Runs `ML_DETECT_ANOMALIES` over `foot_in` and `alight_total` in an unbounded `OVER` window, partitioned by station; keeps only rows flagged `is_anomaly`, carrying occupancy context through. | `station_anomalies` |
 | **[`05_ai_model.sql`](terraform/sql/05_ai_model.sql)** | Register the alert advisor model | none — defines a model, reads no topic | `CREATE MODEL` for a Bedrock text-generation model (`ops_advisor`) with the four-line `SEVERITY/ASSESSMENT/ACTIONS/WATCH` system prompt and a ~20-action LU toolkit. | Flink model `ops_advisor` |
 | **[`05b_qa_model.sql`](terraform/sql/05b_qa_model.sql)** | Register the Ask-AI model | none — defines a model, reads no topic | `CREATE MODEL` for a second, conversational Bedrock model (`ops_qa`) that answers a free-text supervisor question from live context (Markdown, ~120 words). | Flink model `ops_qa` |
-| **[`06_ai_suggestions.sql`](terraform/sql/06_ai_suggestions.sql)** | GenAI advisor | `station_anomalies`, `station_occupancy` | `UNION ALL`s two triggers — any committed anomaly, and direct occupancy-heartbeat band step-ups — builds a prompt with live context and calls `ML_PREDICT` on `ops_advisor`; parses out `severity`. | `station_ai_suggestions` |
+| **[`06_ai_suggestions.sql`](terraform/sql/06_ai_suggestions.sql)** | GenAI advisor | `station_anomalies`, `station_occupancy` | `UNION ALL`s two bounded triggers — a new anomaly episode, and direct occupancy-heartbeat band step-ups — builds a prompt with live context and calls `ML_PREDICT` on `ops_advisor`; parses out `severity`. | `station_ai_suggestions` |
 | **[`07_operator_qa.sql`](terraform/sql/07_operator_qa.sql)** | Ask-AI (on demand) | `operator_questions` (with a backend-snapshotted context) | Builds a prompt from the (length-capped) question + context and calls `ML_PREDICT` on `ops_qa`, correlated by `question_id`. Append-only, no join. | `operator_answers` |
 
 Reading the pipeline end to end, it tells the whole Flink story:
@@ -112,9 +183,9 @@ Reading the pipeline end to end, it tells the whole Flink story:
    counts per window (the `agg_window_seconds` tumble, 5s by default),
    continuously.
 2. **Built-in ML**, `02` runs `ML_DETECT_ANOMALIES` over that windowed stream
-   (the single place the anomaly ML runs). Only genuinely abnormal crowd spikes
-   flow into `station_anomalies`, which feeds **both** the dashboard (the red
-   markers on the occupancy chart) **and** the AI advisor.
+   (the single place the anomaly ML runs). Only rows flagged as anomalous flow
+   into `station_anomalies`, which feeds **both** the dashboard (the red markers
+   on the occupancy chart) **and** the AI advisor.
 3. **GenAI advisor**, `06` calls `ML_PREDICT` against a Bedrock model (`05`
    registers it, with a ~20-action London-Underground toolkit) to write
    `station_ai_suggestions`, concrete guidance for the ops team. It fires from
@@ -132,8 +203,8 @@ Reading the pipeline end to end, it tells the whole Flink story:
    model (`05b`) via `ML_PREDICT` and writes the answer to `operator_answers`.
 
 Signals and the gateline are **not** here: they are deterministic and owned by
-the emulator. Flink does what Flink is uniquely good at, windowed aggregation,
-streaming ML, and AI inference, on the operational event stream.
+the emulator. Flink performs windowed aggregation, streaming ML, and bounded AI
+inference over the resulting operational event stream.
 
 The same pipeline as Confluent Cloud sees it — the live Stream Lineage:
 
@@ -249,25 +320,48 @@ with anomaly markers, a flow-in/out chart, and a live event feed.
 
 For an audience presentation, click **Present**. The full-screen view enlarges
 the operational story and shows the live path from Kafka ingestion, through
-Flink decisions, to AI advice. The status badge reports data freshness rather
+Flink stream processing, to AI advice. The status badge reports data freshness rather
 than socket connectivity alone. Browser libraries are bundled in the image, so
 rendering the dashboard does not depend on a CDN during the presentation.
 
 ![Dashboard](docs/frontend-dashboard.png)
 
-Flip the **Rush Hour** toggle (top-right, red when on) to trigger a surge and
-watch the system react, as occupancy climbs the gateline **restricts** then
-**closes** to cap street inflow, `ML_DETECT_ANOMALIES` flags the spike, and the
-**AI advisor** posts concrete guidance for the ops/safety team (early warning at
-BUSY, escalating through HIGH and CRITICAL). Trains keep cycling through the
-platform (block signalling), draining the crowd, until the gateline reopens. Flip
-it back to reset.
+### Recommended live-demo story
+
+The clearest presentation is to separate automatic control from AI advice in
+time, rather than presenting the whole dashboard as “AI running the station”:
+
+1. **Establish normal operations.** Point out the moving trains, block signals,
+   open gateline, and live occupancy. These are deterministic operations already
+   working before AI is involved.
+2. **Start Rush Hour.** Click **Rush Hour: START**. Passenger inflow rises and
+   the known safety rule restricts, then closes, the gateline as occupancy
+   crosses its configured bands. Block signalling continues to protect each
+   platform. These actions do not wait for AI.
+3. **Follow the streaming evidence.** The presentation strip shows events
+   entering Kafka and Flink calculating the crowd windows.
+   `ML_DETECT_ANOMALIES` identifies an unusual spike; explicit occupancy-band
+   transitions provide a second, deterministic escalation trigger.
+4. **Show what AI adds.** At BUSY, the AI supervisor can provide an early warning
+   before stronger controls are needed. At HIGH and CRITICAL, the gateline rule
+   acts independently while AI explains the situation and suggests additional
+   human actions such as staffing, customer information, or escalation. If
+   Bedrock is delayed, the station remains protected.
+5. **Ask a live question.** Open **Ask AI** and use a prepared question such as
+   “What should station staff do now?” This demonstrates a second appropriate
+   use of AI: answering an unstructured question from a bounded snapshot of
+   current station context.
+
+Trains continue cycling through the platforms and boarding passengers out of
+the station while the gateline caps street inflow. The station recovers and the
+gateline reopens; click **Rush Hour: ACTIVE** to reset the scenario early.
 
 Switch to the **Ask AI** tab (top of the page) to ask ad-hoc questions: it keeps
 the full question/answer history with timestamps and a text box at the bottom.
 Each question is enriched with the live station context and answered by Bedrock,
 while the **Dashboard** tab keeps running in the background. Prepared question
 buttons make it possible to run this part of the demonstration without typing.
+The answer is advisory and cannot invoke a station control.
 
 ![Ask AI tab](docs/frontend-ask-ai.png)
 
@@ -406,22 +500,23 @@ cc-ai-tilley-station-demo/
   `signal_state` and `gateline_state` to Kafka. Self-stabilising boarding keeps
   occupancy in a healthy mid-band; only a surge pushes it critical, and it
   recovers. The only control it consumes is the presenter's `demo_control`.
-- **Flink SQL** (`terraform/sql/`), **analytics only**: windowed crowd metrics
-  (`01`), `ML_DETECT_ANOMALIES` as the filter (`02`), the Bedrock-backed advisory
-  AI (`05`/`06`, `ML_PREDICT`) triggered by anomalies + occupancy bands, and the
-  on-demand **Ask-AI** job (`05b`/`07`) that answers a supervisor question, with
-  a live-context snapshot the backend attaches, via a second Bedrock model. It
-  derives insight from the stream; it does not control the station.
+- **Flink SQL** (`terraform/sql/`), provides **streaming intelligence without
+  actuation**: windowed crowd metrics (`01`), `ML_DETECT_ANOMALIES` as the filter
+  (`02`), the Bedrock-backed advisory AI (`05`/`06`, `ML_PREDICT`) triggered by
+  anomaly episodes and upward occupancy-band transitions, and the on-demand
+  **Ask-AI** job (`05b`/`07`) that answers a supervisor question from a
+  live-context snapshot attached by the backend. It derives insight from the
+  stream; it does not control the station.
 - **Backend**, one Socket.IO channel per stream (`occupancy`, `metrics`,
   `anomaly`, `signal`, `gateline`, `ai_suggestion`, `operator_answer`, plus raw
   events); the `POST /demo/surge` / `POST /demo/reset` control endpoints; and
   `POST /ask`, which publishes the question to `operator_questions`.
-- **Frontend**, a single React page served at `/` (loaded from CDNs, no build
-  step or `npm`) with two tabs: a **Dashboard** (AI advice feed, animated SVG
-  station strip with the occupancy readout in the Tilley box and trains that queue
-  behind red signals, Chart.js occupancy/flow charts, live event feed, Rush Hour
-  toggle) and an **Ask AI** tab (full Q&A history with timestamps + a text box).
-  Append `?demo=1` for a cloud-free preview.
+- **Frontend**, a single React page served at `/` with no build step or `npm`.
+  Its pinned browser libraries are bundled locally for presentation resilience.
+  It has two tabs: a **Dashboard** (Kafka → Flink → AI activity strip, AI advice
+  feed, animated SVG station, occupancy/flow charts, live event feed, and Rush
+  Hour control) and **Ask AI** (prepared questions, full Q&A history, and a text
+  box). Append `?demo=1` for a cloud-free preview.
 
 ## Developing without Docker
 
