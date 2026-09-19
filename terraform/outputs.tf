@@ -30,6 +30,14 @@ output "flink_region_rest_endpoint" {
   value = data.confluent_flink_region.main.rest_endpoint
 }
 
+output "active_flink_model_names" {
+  description = "Current advisor and Ask-AI model names; use previous values in obsolete_model_names after prompt changes."
+  value = {
+    advisor = local.model_name
+    qa      = local.qa_model_name
+  }
+}
+
 # --- client credentials (emulator + backend) -> KAFKA_API_KEY / SECRET ------
 output "kafka_api_key" {
   description = "KAFKA_API_KEY"

@@ -1,13 +1,12 @@
 # Secrets — real credentials never committed
 .env
 
-# Terraform state & local dirs (keep .terraform.lock.hcl in VCS)
+# Terraform state & local dirs (.terraform.lock.hcl is committed for reproducibility)
 terraform/*.tfstate
 terraform/*.tfstate.*
 terraform/.terraform/
 terraform/tf_outputs.json
 terraform/.terraform
-terraform/.terraform.lock.hcl
 *.tfplan
 
 # Terraform variable files may hold secrets — keep only the example

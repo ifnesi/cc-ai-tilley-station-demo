@@ -2,7 +2,7 @@
   "type": "record",
   "name": "station_metrics",
   "namespace": "tilley",
-  "doc": "Wide, one row per tumbling window (default 15s). Windowed crowd metrics feeding the charts, anomaly detection and AI advisor.",
+  "doc": "Wide, one row per tumbling window (default 5s). Windowed crowd metrics feeding the charts, anomaly detection and AI advisor.",
   "fields": [
     { "name": "station_name", "type": "string", "default": "", "doc": "Per-station key, carried through so downstream OVER windows (anomalies, AI) partition on a real column, not a constant." },
     { "name": "window_start", "type": { "type": "long", "logicalType": "timestamp-millis" } },
@@ -17,7 +17,7 @@
     { "name": "board_east", "type": "int", "doc": "board_total for east_bound trains." },
     { "name": "board_west", "type": "int", "doc": "board_total for west_bound trains." },
     { "name": "net_change", "type": "int", "doc": "foot_in + alight_wait - board_total." },
-    { "name": "occupancy", "type": "int", "doc": "Latest station_occupancy snapshot in the window." },
-    { "name": "occupancy_pct", "type": "double", "doc": "occupancy / capacity." }
+    { "name": "occupancy", "type": "int", "doc": "Peak station_occupancy snapshot in the window; deterministic and conservative across Kafka partitions." },
+    { "name": "occupancy_pct", "type": "double", "doc": "Peak window occupancy / capacity." }
   ]
 }

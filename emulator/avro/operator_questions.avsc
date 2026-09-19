@@ -2,7 +2,7 @@
   "type": "record",
   "name": "operator_questions",
   "namespace": "tilley",
-  "doc": "An ad-hoc question the duty supervisor submits from the dashboard (backend -> Kafka). Flink enriches it with the latest station_metrics + station_anomalies and calls Bedrock; the answer lands on operator_answers.",
+  "doc": "An ad-hoc question the duty supervisor submits from the dashboard (backend -> Kafka). The backend snapshots recent station_metrics and station_anomalies context; Flink calls Bedrock and writes the answer to operator_answers.",
   "fields": [
     { "name": "question_id", "type": "string", "doc": "UUID correlating the answer back to the asking browser." },
     { "name": "question", "type": "string", "doc": "The supervisor's free-text question." },

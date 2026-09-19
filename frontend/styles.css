@@ -6,6 +6,7 @@
   --text: #e6edf3;
   --muted: #8b98a5;
   --accent: #2f81f7;
+  --signal: #33d17a;
   --green: #2ea043;
   --amber: #d29922;
   --red: #f85149;
@@ -17,23 +18,34 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 48% -20%, rgba(47,129,247,.11), transparent 38%),
+    linear-gradient(rgba(255,255,255,.013) 1px, transparent 1px),
+    var(--bg);
+  background-size: auto, 100% 32px, auto;
   color: var(--text);
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font: 15px/1.45 "Avenir Next", Avenir, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* ---------- header ---------- */
 header {
   display: flex; align-items: center; gap: 14px;
-  padding: 12px 20px; border-bottom: 1px solid var(--border);
+  min-height: 68px; padding: 12px 20px; border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, #0f151c, #0b0f14);
   position: sticky; top: 0; z-index: 10;
 }
-header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .2px; }
-header .sub { color: var(--muted); font-size: 12px; }
-.status { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #30363d; color: #adbac7; }
+header h1 { font-size: 18px; margin: 0; font-weight: 750; letter-spacing: .01em; }
+header .sub { color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+.brand-mark {
+  display: grid; place-items: center; width: 28px; height: 28px; border: 2px solid #d4dde5;
+  border-radius: 50%; color: var(--east); font-size: 14px; transform: rotate(90deg);
+  box-shadow: inset 0 0 0 5px var(--bg);
+}
+.status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; padding: 5px 10px; border-radius: 999px; background: #30363d; color: #adbac7; white-space: nowrap; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px rgba(173,186,199,.10); }
 .status.ok { background: rgba(46,160,67,.18); color: #56d364; }
+.status.warn { background: rgba(210,153,34,.16); color: #e3b341; }
 .status.bad { background: rgba(248,81,73,.18); color: #ff7b72; }
 .spacer { flex: 1; }
 .controls { display: flex; gap: 8px; }
@@ -44,12 +56,28 @@ button {
 button.secondary { background: #21262d; color: #c9d1d9; }
 button:hover { filter: brightness(1.08); }
 button:active { transform: translateY(1px); }
+button:disabled { cursor: not-allowed; opacity: .55; filter: none; transform: none; }
+.rush-button { min-width: 190px; background: var(--green); border-color: transparent; }
+.rush-button.active { background: var(--red); animation: rush-glow 1.5s ease-in-out infinite; }
+.present-button { min-width: 104px; }
+@keyframes rush-glow { 50% { box-shadow: 0 0 0 5px rgba(248,81,73,.13), 0 0 24px rgba(248,81,73,.16); } }
+
+.notice {
+  position: fixed; z-index: 30; top: 78px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 20px; align-items: center; min-width: 320px; max-width: calc(100vw - 32px);
+  padding: 10px 12px 10px 16px; border: 1px solid var(--border); border-radius: 8px;
+  background: #17212a; box-shadow: 0 12px 36px rgba(0,0,0,.42); font-weight: 700;
+}
+.notice.ok { border-color: rgba(86,211,100,.45); }
+.notice.error { border-color: rgba(255,123,114,.58); color: #ffb4ae; }
+.notice button { margin-left: auto; padding: 0 6px; background: transparent; border: 0; color: var(--muted); font-size: 22px; }
 
 /* ---------- layout ---------- */
 main {
   display: grid; gap: 14px; padding: 16px 20px 28px;
   grid-template-columns: repeat(10, 1fr);
   grid-template-areas:
+    "journey journey journey journey journey journey journey journey journey journey"
     "ai     ai     ai     ai     ai     ai     ai     ai     ai     ai"
     "feed   feed   feed   strip  strip  strip  strip  strip  strip  strip"
     "anom   anom   anom   anom   anom   anom   anom   anom   anom   anom"
@@ -60,6 +88,7 @@ main {
   main {
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
+      "journey journey"
       "ai ai"
       "strip strip"
       "feed feed"
@@ -68,7 +97,7 @@ main {
   }
 }
 @media (max-width: 720px) {
-  main { grid-template-columns: 1fr; grid-template-areas: "ai" "strip" "feed" "anom" "chartA" "chartB"; }
+  main { grid-template-columns: 1fr; grid-template-areas: "journey" "ai" "strip" "feed" "anom" "chartA" "chartB"; }
 }
 
 .panel {
@@ -86,8 +115,28 @@ main {
 .area-ai { grid-area: ai; }
 .area-anom { grid-area: anom; }
 
+/* ---------- three-stage demo narrative ---------- */
+.journey {
+  grid-area: journey; display: grid; grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: stretch; gap: 10px; padding: 8px; border: 1px solid var(--border);
+  border-radius: 12px; background: rgba(10,15,20,.72); overflow: hidden;
+}
+.journey-stage { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 7px 12px; border-radius: 8px; color: #596877; transition: color .3s, background .3s; }
+.journey-stage.seen { color: var(--text); background: rgba(255,255,255,.025); }
+.journey-light { width: 10px; height: 10px; flex: none; border-radius: 50%; background: #34404c; box-shadow: 0 0 0 4px rgba(52,64,76,.16); }
+.journey-stage.seen .journey-light { background: var(--signal); box-shadow: 0 0 0 4px rgba(51,209,122,.13); }
+.journey-stage.pulse .journey-light { animation: data-pulse .8s ease-out; }
+.journey-copy { display: flex; flex-direction: column; min-width: 0; }
+.journey-eyebrow { color: var(--muted); font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .11em; }
+.journey-stage strong { font-size: 14px; letter-spacing: .01em; }
+.journey-stage small { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.journey-link { align-self: center; color: #40505f; font-size: 20px; }
+@keyframes data-pulse { 0% { box-shadow: 0 0 0 0 rgba(51,209,122,.55); } 100% { box-shadow: 0 0 0 14px rgba(51,209,122,0); } }
+
 /* ---------- latest-anomaly tile ---------- */
 .anomaly-tile .anom-count { color: #6e7681; font-size: 10px; font-weight: 700; margin-left: 10px; letter-spacing: .04em; }
+.anomaly-tile.stale { opacity: .62; }
+.anomaly-tile.stale .anom-dot { background: var(--muted); box-shadow: 0 0 0 4px rgba(139,152,165,.12); }
 .anom-body { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
 .anom-metric { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 800; color: var(--text); flex: none; }
 .anom-dot { width: 10px; height: 10px; border-radius: 999px; background: #ff2d55; box-shadow: 0 0 0 4px rgba(255,45,85,.18); flex: none; }
@@ -179,6 +228,56 @@ main {
   border-radius: 8px; padding: 10px 12px;
 }
 .ask-input-bar button { min-width: 88px; }
+.ask-prompts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ask-prompts > span { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin-right: 2px; }
+.prompt-chip {
+  padding: 7px 11px; border-radius: 999px; background: var(--panel-2); color: #b8c3ce;
+  border-color: #293746; font-size: 12px; font-weight: 650;
+}
+.prompt-chip:hover { color: white; border-color: var(--accent); filter: none; }
+
+/* ---------- presentation mode ---------- */
+.presenter header { position: static; min-height: 62px; }
+.presenter header .sub, .presenter .tabs, .presenter .present-button { display: none; }
+.presenter main {
+  max-width: none; min-height: calc(100vh - 62px); padding: 14px 22px 18px; gap: 12px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, .8fr);
+  grid-template-rows: auto minmax(170px, .62fr) minmax(270px, 1fr) auto minmax(150px, .55fr);
+  grid-template-areas:
+    "journey journey"
+    "ai ai"
+    "strip strip"
+    "anom anom"
+    "chartA chartA";
+}
+.presenter .area-feed, .presenter .area-chartB { display: none; }
+.presenter .panel { padding: 13px 16px; }
+.presenter .panel h2 { font-size: 12px; }
+.presenter .ai-scroll { max-height: 150px; }
+.presenter .ai-card:not(:first-child) { display: none; }
+.presenter .ai-line { font-size: clamp(16px, 1.25vw, 21px); line-height: 1.3; }
+.presenter .area-strip { display: flex; flex-direction: column; min-height: 0; }
+.presenter .area-strip svg { flex: 1; min-height: 0; max-height: 330px; }
+.presenter .anom-v { font-size: 19px; }
+.presenter .chart-box { height: 145px; }
+
+@media (max-height: 820px) and (min-width: 1101px) {
+  .presenter main {
+    grid-template-rows: auto minmax(128px, .5fr) minmax(220px, 1fr) auto minmax(120px, .45fr);
+  }
+  .presenter .ai-scroll { max-height: 108px; }
+  .presenter .area-strip svg { max-height: 260px; }
+  .presenter .chart-box { height: 112px; }
+}
+
+@media (max-width: 900px) {
+  header { flex-wrap: wrap; }
+  header .spacer { display: none; }
+  .controls { margin-left: auto; }
+  .journey { grid-template-columns: 1fr; }
+  .journey-link { display: none; }
+  .presenter main { display: grid; grid-template-columns: 1fr; grid-template-areas: "journey" "ai" "strip" "anom" "chartA"; grid-template-rows: auto; }
+}
 
 /* ---------- rendered markdown (AI answers) ---------- */
 .ask-a-head { margin-bottom: 6px; }

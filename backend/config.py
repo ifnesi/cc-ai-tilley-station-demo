@@ -40,6 +40,11 @@ class Config:
     # arbitrary threads cleanly. Set to 'eventlet' only if you know you need it.
     async_mode: str = "threading"
 
+    # Loaded from ASK_MIN_INTERVAL_SECONDS in from_env(). None is reserved for
+    # dependency-injected test configurations created without environment I/O.
+    ask_min_interval_seconds: float | None = None
+    anomaly_context_max_age_seconds: float | None = None
+
     demo_control_topic: str = "demo_control"
     agg_window_seconds: int = ref.AGG_WINDOW_SECONDS  # from .env via reference.py
 
@@ -71,6 +76,8 @@ class Config:
             host=e["BACKEND_HOST"],
             port=int(e["BACKEND_PORT"]),
             async_mode=e["SOCKETIO_ASYNC_MODE"],
+            ask_min_interval_seconds=float(e["ASK_MIN_INTERVAL_SECONDS"]),
+            anomaly_context_max_age_seconds=float(e["ANOMALY_CONTEXT_MAX_AGE_SECONDS"]),
             surge_factor=float(e["SURGE_FACTOR"]),
             surge_duration=int(e["SURGE_DURATION"]),
         )
@@ -98,10 +105,9 @@ class Config:
             # Live dashboard: start from the newest events, do not replay history.
             "auto.offset.reset": "latest",
             "enable.auto.commit": True,
-            # Flink writes the derived topics transactionally (exactly-once), so a
-            # default read_committed consumer only sees them when Flink commits its
-            # checkpoint (~1 min). read_uncommitted surfaces them immediately, so
-            # metrics / signals / gateline / anomalies / AI reach the UI in seconds.
+            # This consumer only renders the dashboard. Reading uncommitted output
+            # lowers UI latency and may show a duplicate after a Flink rollback;
+            # downstream Flink/Bedrock jobs retain read_committed semantics.
             "isolation.level": "read_uncommitted",
         }
 

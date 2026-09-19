@@ -44,7 +44,7 @@ variable "stream_governance" {
 variable "flink_cfu" {
   type        = number
   default     = 10
-  description = "Max CFUs for the Flink compute pool (metrics + anomalies + 2 control loops + AI)"
+  description = "Max CFUs for the Flink compute pool (metrics, anomalies, and AI)"
 }
 
 variable "state_ttl" {
@@ -53,7 +53,7 @@ variable "state_ttl" {
   description = <<-EOT
     sql.state-ttl for the DML statements — bounds idle keyed state and clears the
     HIGH_STATE_OPERATOR_WITHOUT_TTL warning. Safe for the demo: every key updates
-    every ~15s so active state is never idle-evicted. Empty string disables it.
+    every few seconds so active state is never idle-evicted. Empty string disables it.
   EOT
 }
 
@@ -64,10 +64,15 @@ variable "scan_idle_timeout" {
     sql.tables.scan.idle-timeout for the DML statements. Topics have multiple
     partitions but modest traffic, so idle partitions would otherwise stall the
     event-time watermark (Confluent's default idleness grows up to 5 min),
-    freezing every windowed / OVER operator (metrics, control loops, anomalies,
-    AI). A short fixed timeout keeps the watermark advancing from active
-    partitions so the pipeline stays live and control latency stays low.
+    freezing the metrics, anomaly, and AI operators. A short fixed timeout keeps
+    the watermark advancing from active partitions so the pipeline stays live.
   EOT
+}
+
+variable "watermark_max_drift" {
+  type        = string
+  default     = "5 s"
+  description = "Maximum watermark alignment drift. Kept in step with the fixed idle timeout for short demo windows; empty string uses Confluent's default."
 }
 
 # ---------------------------------------------------------------------------
@@ -76,6 +81,12 @@ variable "scan_idle_timeout" {
 variable "partitions_count" {
   type    = number
   default = 6
+}
+
+variable "client_consumer_group_prefix" {
+  type        = string
+  default     = "tilley-demo"
+  description = "Kafka consumer-group prefix granted to the runtime client service account. Keep this aligned with CONSUMER_GROUP in .env."
 }
 
 variable "topic_retention_ms" {
@@ -154,6 +165,19 @@ variable "ai_qa_model_name" {
   description = "Second Bedrock model for the operator Ask-AI feature (conversational, not the 4-line alert format)."
 }
 
+variable "obsolete_model_names" {
+  type        = list(string)
+  default     = []
+  description = "Superseded hash-suffixed Flink model names to drop explicitly. Remove each entry after a successful apply."
+
+  validation {
+    condition = alltrue([
+      for name in var.obsolete_model_names : can(regex("^[A-Za-z0-9_-]+$", name))
+    ])
+    error_message = "Obsolete model names may contain only letters, digits, underscores, and hyphens."
+  }
+}
+
 variable "ai_max_tokens" {
   type        = number
   default     = 512
@@ -164,6 +188,35 @@ variable "ai_temperature" {
   type        = number
   default     = 0.7
   description = "Bedrock sampling temperature for the advisor. Higher = more varied wording/actions (less repetition); 0 = deterministic."
+}
+
+variable "ai_client_timeout" {
+  type        = number
+  default     = 30
+  description = "Seconds before an ML_PREDICT remote Bedrock call times out."
+}
+
+variable "ai_max_parallelism" {
+  type        = number
+  default     = 2
+  description = "Maximum concurrent Bedrock requests per ML_PREDICT operator."
+}
+
+variable "ai_retry_count" {
+  type        = number
+  default     = 1
+  description = "Maximum remote-model retries. Kept low to bound duplicate calls and cost."
+}
+
+variable "ai_anomaly_cooldown_seconds" {
+  type        = number
+  default     = 60
+  description = "Quiet gap required before a later anomaly on the same metric starts a new Bedrock-advisor episode."
+
+  validation {
+    condition     = var.ai_anomaly_cooldown_seconds >= 1 && floor(var.ai_anomaly_cooldown_seconds) == var.ai_anomaly_cooldown_seconds
+    error_message = "ai_anomaly_cooldown_seconds must be a positive whole number."
+  }
 }
 
 # ---------------------------------------------------------------------------

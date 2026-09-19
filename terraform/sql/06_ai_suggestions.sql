@@ -3,15 +3,15 @@
 --
 -- The AI is EXPENSIVE, so ML_PREDICT (the Bedrock call) fires only on meaningful
 -- events, from two sources UNION ALL'd (no join):
---   A) ANOMALY episodes — consumed straight from station_anomalies, the output of
---      02 (the single place ML_DETECT_ANOMALIES runs). Each anomalous window is
---      worth advising on, and 02 is windowed so this is at most ~1 per 15s.
---   B) OCCUPANCY bands — from the windowed station_metrics. Two intentional
---      cadences (see the WHERE below): a step UP into BUSY (70%) fires once and is
---      then debounced on the band (LAG), so a BUSY plateau does not re-fire; but
---      HIGH (85%) and CRITICAL (95%) — band >= 2 — deliberately re-fire EVERY
---      window as a running reminder while the station is in trouble. This is a
---      cadence policy, not pure debouncing, and keeps the advice live during a surge.
+--   A) ANOMALY episodes — consumed from station_anomalies, the output of 02 (the
+--      single place ML_DETECT_ANOMALIES runs). Repeated anomalies for one metric
+--      form one episode; a new call is allowed after a configured quiet gap.
+--   B) OCCUPANCY bands — directly from the authoritative station_occupancy
+--      heartbeat, avoiding an intermediate transactional topic on the
+--      latency-sensitive safety path. One intentional
+--      cadence: a step UP into BUSY, HIGH, or CRITICAL fires once. LAG debounces
+--      plateaus, preventing a five-second window from becoming an unbounded stream
+--      of paid Bedrock calls during a sustained incident.
 --
 -- Both anomaly and threshold advice reach the ops team; the anomaly ones add to
 -- the occupancy-driven ones. ML_PREDICT + task=text_generation matches the
@@ -19,8 +19,9 @@
 INSERT INTO station_ai_suggestions
   (`trigger`, metric, severity, suggestion, event_time)
 WITH
--- A) anomalies: consume the ML output directly (single source of detection).
-anomaly_trig AS (
+-- A) anomalies: consume the ML output directly (single source of detection),
+-- but retain the previous anomaly time per metric to identify episode boundaries.
+anomaly_base AS (
   SELECT
     'anomaly' AS `trigger`,
     metric,
@@ -28,23 +29,39 @@ anomaly_trig AS (
     forecast,
     occupancy,
     occupancy_pct AS pct,
+    window_start,
     `$rowtime` AS event_time
   FROM station_anomalies
+),
+anomaly_lag AS (
+  SELECT
+    anomaly_base.*,
+    LAG(window_start) OVER (PARTITION BY metric ORDER BY event_time) AS prev_anomaly_window
+  FROM anomaly_base
+),
+anomaly_trig AS (
+  SELECT `trigger`, metric, actual, forecast, occupancy, pct, event_time
+  FROM anomaly_lag
+  WHERE prev_anomaly_window IS NULL
+     OR window_start >= prev_anomaly_window + INTERVAL '${anomaly_cooldown}' SECOND
 ),
 -- B) occupancy band step-ups, debounced on the band change.
 occ AS (
   SELECT
     station_name,
     occupancy,
-    occupancy_pct AS pct,
+    COALESCE(
+      CAST(occupancy AS DOUBLE) / NULLIF(CAST(capacity AS DOUBLE), 0),
+      0.0
+    ) AS pct,
     `$rowtime` AS event_time,
     CASE
-      WHEN occupancy_pct >= ${pct_critical} THEN 3
-      WHEN occupancy_pct >= ${pct_high} THEN 2
-      WHEN occupancy_pct >= ${pct_low} THEN 1
+      WHEN CAST(occupancy AS DOUBLE) / NULLIF(CAST(capacity AS DOUBLE), 0) >= ${pct_critical} THEN 3
+      WHEN CAST(occupancy AS DOUBLE) / NULLIF(CAST(capacity AS DOUBLE), 0) >= ${pct_high} THEN 2
+      WHEN CAST(occupancy AS DOUBLE) / NULLIF(CAST(capacity AS DOUBLE), 0) >= ${pct_low} THEN 1
       ELSE 0
     END AS band
-  FROM station_metrics
+  FROM station_occupancy
 ),
 occ_lag AS (
   SELECT occ.*, LAG(band) OVER (PARTITION BY station_name ORDER BY event_time) AS prev_band
@@ -69,11 +86,9 @@ threshold_trig AS (
     pct,
     event_time
   FROM occ_lag
-  -- Fire on stepping UP into BUSY (early warning), HIGH, or CRITICAL, AND keep
-  -- advising every window while HIGH/CRITICAL (band >= 2) so the demo stays lively
-  -- during a surge. A steady BUSY plateau still fires only on the step up.
-  WHERE (band >= 1 AND (prev_band IS NULL OR band > prev_band))
-     OR band >= 2
+  -- Fire once when stepping up into BUSY, HIGH, or CRITICAL. A plateau does not
+  -- call the remote model again; the dashboard retains the latest advice.
+  WHERE band >= 1 AND (prev_band IS NULL OR band > prev_band)
 ),
 unified AS (
   SELECT `trigger`, metric, actual, forecast, occupancy, pct, event_time FROM anomaly_trig
@@ -129,4 +144,15 @@ SELECT
   m.suggestion,
   p.event_time
 FROM prompted AS p
-CROSS JOIN LATERAL TABLE(ML_PREDICT('${model_name}', p.prompt)) AS m(suggestion);
+CROSS JOIN LATERAL TABLE(
+  ML_PREDICT(
+    '${model_name}',
+    p.prompt,
+    map[
+      'async_enabled', true,
+      'client_timeout', ${ai_client_timeout},
+      'max_parallelism', ${ai_max_parallelism},
+      'retry_count', ${ai_retry_count}
+    ]
+  )
+) AS m(suggestion);

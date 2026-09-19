@@ -122,10 +122,9 @@ class EmulatorConfig:
             "group.id": group,
             "auto.offset.reset": "latest",
             "enable.auto.commit": True,
-            # signal_state / gateline_state are written transactionally by Flink;
-            # read_uncommitted lets the emulator obey control changes within a few
-            # seconds instead of waiting for Flink's ~1-min checkpoint commit.
-            "isolation.level": "read_uncommitted",
+            # demo_control is written directly by the backend. Keep Kafka's
+            # read_committed semantics so an aborted write is never acted on.
+            "isolation.level": "read_committed",
         }
 
     def schema_registry_config(self) -> dict:

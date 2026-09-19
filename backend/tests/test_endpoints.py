@@ -6,7 +6,8 @@ import fastavro
 import pytest
 
 from backend.app import create_app
-from backend.config import FRONTEND_DIR
+from backend.config import FRONTEND_DIR, Config
+from backend.producer import build_operator_question
 from emulator.schemas import load_schema
 
 DEMO_SCHEMA = fastavro.parse_schema(load_schema("demo_control"))
@@ -76,6 +77,24 @@ def test_producer_unavailable_returns_503():
     assert resp.status_code == 503
 
 
+def test_ask_rate_limit_is_config_driven():
+    class FakeQuestionProducer:
+        def send(self, question, station_name, context=""):
+            return build_operator_question(question, station_name, context)
+
+    app, _ = create_app(
+        question_producer=FakeQuestionProducer(),
+        config=Config(ask_min_interval_seconds=10),
+        async_mode="threading",
+        frontend_dir=FRONTEND_DIR,
+    )
+    ask_client = app.test_client()
+    assert ask_client.post("/ask", json={"question": "Status?"}).status_code == 202
+    limited = ask_client.post("/ask", json={"question": "Status now?"})
+    assert limited.status_code == 429
+    assert limited.get_json()["retry_after_seconds"] > 0
+
+
 # --- health + static serving ----------------------------------------------
 
 def test_health_ok(client):
@@ -88,9 +107,17 @@ def test_index_served(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert b"Tilley" in resp.data  # placeholder or real frontend index.html
+    assert b"cdn.jsdelivr.net" not in resp.data
+    assert b'/vendor/react.production.min.js' in resp.data
 
 
 def test_static_file_served(client):
     # styles.css ships with the frontend skeleton.
     resp = client.get("/styles.css")
     assert resp.status_code == 200
+
+
+def test_vendored_browser_dependency_served(client):
+    resp = client.get("/vendor/react.production.min.js")
+    assert resp.status_code == 200
+    assert len(resp.data) > 10_000

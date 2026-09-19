@@ -11,8 +11,13 @@ services:
     image: tilley-station:latest
     command: python -m backend.run
     env_file: .env
+    environment:
+      # Listen inside the container; the published host port remains loopback-only.
+      BACKEND_HOST: 0.0.0.0
     ports:
-      - "8080:8080"
+      # Keep the unauthenticated demo UI and control endpoints local by default.
+      # Change the host address deliberately if this needs to be shared.
+      - "127.0.0.1:8080:8080"
     restart: unless-stopped
 
   emulator:

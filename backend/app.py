@@ -13,6 +13,8 @@ fakes. ``backend/run.py`` wires the real Confluent Cloud clients.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +47,13 @@ def create_app(
     app.question_producer = question_producer  # type: ignore[attr-defined]
     app.latest_state = latest_state  # type: ignore[attr-defined]
 
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
+    # Flask-SocketIO's default same-origin policy is appropriate for this
+    # single-origin application. Docker Compose also binds the service to
+    # 127.0.0.1 by default.
+    socketio = SocketIO(app, async_mode=async_mode)
+
+    ask_rate_lock = threading.Lock()
+    ask_last_request: dict[str, float] = {}
 
     # --- demo-control endpoints -------------------------------------------
 
@@ -91,8 +99,34 @@ def create_app(
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict):
             return jsonify(error="request body must be a JSON object"), 400
+        client_address = request.remote_addr or "unknown"
+        now = time.monotonic()
+        if config.ask_min_interval_seconds is not None and config.ask_min_interval_seconds > 0:
+            with ask_rate_lock:
+                previous = ask_last_request.get(client_address)
+                retry_after = (
+                    config.ask_min_interval_seconds - (now - previous)
+                    if previous is not None
+                    else 0
+                )
+                if retry_after > 0:
+                    return (
+                        jsonify(
+                            error="ask rate limit exceeded",
+                            retry_after_seconds=round(retry_after, 1),
+                        ),
+                        429,
+                    )
+                ask_last_request[client_address] = now
         state = app.latest_state  # type: ignore[attr-defined]
-        context = state.context_string(ref.STATION_CAPACITY) if state is not None else ""
+        context = (
+            state.context_string(
+                ref.STATION_CAPACITY,
+                max_anomaly_age_seconds=config.anomaly_context_max_age_seconds,
+            )
+            if state is not None
+            else ""
+        )
         try:
             record = producer.send(
                 question=body.get("question", ""), station_name=ref.STATION_NAME, context=context
@@ -121,6 +155,7 @@ def create_app(
             neighbour_east=ref.NEIGHBOUR_EAST,
             surge_duration=config.surge_duration,
             surge_factor=config.surge_factor,
+            anomaly_context_max_age_seconds=config.anomaly_context_max_age_seconds,
         ), 200
 
     # --- static frontend (no build step) ----------------------------------

@@ -27,6 +27,12 @@ CROSS JOIN LATERAL TABLE(
       '. Live station context: ',
       CASE WHEN q.context IS NULL OR q.context = '' THEN 'not available' ELSE SUBSTR(q.context, 1, 1000) END,
       '. Answer the question using this context.'
-    )
+    ),
+    map[
+      'async_enabled', true,
+      'client_timeout', ${ai_client_timeout},
+      'max_parallelism', ${ai_max_parallelism},
+      'retry_count', ${ai_retry_count}
+    ]
   )
 ) AS m(answer);

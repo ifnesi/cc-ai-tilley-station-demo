@@ -11,7 +11,8 @@ station runs its own **deterministic operational controls**, block signalling
 street gateline. On top of that operational event stream, **Confluent Cloud
 provides the intelligence**: real-time crowd metrics, ML anomaly detection, and a
 **GenAI advisor** that turns anomalies into plain-English guidance for the duty
-supervisor, all within seconds, end to end.
+supervisor, continuously and with the latency/correctness trade-offs described
+below.
 
 That separation is the point: control that *should* be deterministic stays
 deterministic; the streaming platform adds observability, ML, and AI-assisted
@@ -97,11 +98,11 @@ Each statement lives in `terraform/sql/` and is deployed by `terraform apply`:
 
 | Statement | What it's for | Inputs | What it does | Output |
 |---|---|---|---|---|
-| **[`01_metrics.sql`](terraform/sql/01_metrics.sql)** | Windowed crowd metrics | `passengers_flow`, `train_in_station`, `train_in_transit`, `station_occupancy` | `UNION ALL`s the four raw streams into one normalised stream, then a single `TUMBLE` aggregation (`agg_window_seconds`, 5s) — foot-in, alighting/boarding totals (and per-direction), net change, latest occupancy + `occupancy_pct`. | `station_metrics` |
+| **[`01_metrics.sql`](terraform/sql/01_metrics.sql)** | Windowed crowd metrics | `passengers_flow`, `train_in_station`, `train_in_transit`, `station_occupancy` | `UNION ALL`s the four raw streams into one normalised stream, then a single `TUMBLE` aggregation (`agg_window_seconds`, 5s) — foot-in, alighting/boarding totals (and per-direction), net change, deterministic peak-window occupancy + `occupancy_pct`. | `station_metrics` |
 | **[`02_anomalies.sql`](terraform/sql/02_anomalies.sql)** | ML anomaly detection (the filter) | `station_metrics` | Runs `ML_DETECT_ANOMALIES` over `foot_in` and `alight_total` in an unbounded `OVER` window, partitioned by station; keeps only rows flagged `is_anomaly`, carrying occupancy context through. | `station_anomalies` |
 | **[`05_ai_model.sql`](terraform/sql/05_ai_model.sql)** | Register the alert advisor model | none — defines a model, reads no topic | `CREATE MODEL` for a Bedrock text-generation model (`ops_advisor`) with the four-line `SEVERITY/ASSESSMENT/ACTIONS/WATCH` system prompt and a ~20-action LU toolkit. | Flink model `ops_advisor` |
 | **[`05b_qa_model.sql`](terraform/sql/05b_qa_model.sql)** | Register the Ask-AI model | none — defines a model, reads no topic | `CREATE MODEL` for a second, conversational Bedrock model (`ops_qa`) that answers a free-text supervisor question from live context (Markdown, ~120 words). | Flink model `ops_qa` |
-| **[`06_ai_suggestions.sql`](terraform/sql/06_ai_suggestions.sql)** | GenAI advisor | `station_anomalies`, `station_metrics` | `UNION ALL`s two triggers — any anomaly, and occupancy band step-ups/HIGH-CRITICAL re-fires — builds a prompt with live context, and calls `ML_PREDICT` on `ops_advisor`; parses out `severity`. | `station_ai_suggestions` |
+| **[`06_ai_suggestions.sql`](terraform/sql/06_ai_suggestions.sql)** | GenAI advisor | `station_anomalies`, `station_occupancy` | `UNION ALL`s two triggers — any committed anomaly, and direct occupancy-heartbeat band step-ups — builds a prompt with live context and calls `ML_PREDICT` on `ops_advisor`; parses out `severity`. | `station_ai_suggestions` |
 | **[`07_operator_qa.sql`](terraform/sql/07_operator_qa.sql)** | Ask-AI (on demand) | `operator_questions` (with a backend-snapshotted context) | Builds a prompt from the (length-capped) question + context and calls `ML_PREDICT` on `ops_qa`, correlated by `question_id`. Append-only, no join. | `operator_answers` |
 
 Reading the pipeline end to end, it tells the whole Flink story:
@@ -117,13 +118,14 @@ Reading the pipeline end to end, it tells the whole Flink story:
 3. **GenAI advisor**, `06` calls `ML_PREDICT` against a Bedrock model (`05`
    registers it, with a ~20-action London-Underground toolkit) to write
    `station_ai_suggestions`, concrete guidance for the ops team. It fires from
-   two sources: **any anomaly** on `station_anomalies`, **and** occupancy bands on
-   `station_metrics`. The band cadence is deliberate: a step *up* into BUSY (70%,
-   an early warning) fires once and is then debounced on a plateau, while HIGH
-   (85%) and CRITICAL (95%) re-fire **every window** as a running reminder while
-   the station is in trouble. It never fires per raw event, so the expensive AI
-   stays cheap, and the advice scales from a one-off early warning to continuous
-   crisis guidance during a surge.
+   two sources: committed anomalies on `station_anomalies`, and occupancy
+   bands calculated directly from the authoritative `station_occupancy` heartbeat.
+   Repeated anomalies for the same metric form one episode; a new call is allowed
+   after a Terraform-configured quiet gap.
+   A step *up* into BUSY (70%), HIGH (85%), or CRITICAL (95%) fires once; `LAG`
+   debounces a plateau so a five-second heartbeat cannot create an unbounded run
+   of paid Bedrock requests. Explicit timeout, retry and parallelism settings put
+   a further bound on remote inference.
 4. **GenAI on demand**, `07` powers the **Ask-AI** feature: a supervisor
    question lands on `operator_questions` with a live-context snapshot the backend
    took from its metrics/anomaly consumers; `07` sends it to a second Bedrock
@@ -210,6 +212,22 @@ details, the domain constants, **and** the managed-MCP URL (`CC_MCP_URL`) back
 into your root `.env` automatically. (The MCP auth token `CC_MCP_AUTH` is the one
 value you add by hand, see [Ask the live data from Claude Code](#ask-the-live-data-from-claude-code-rtce--managed-mcp).)
 
+All long-running DML statements have readable, content-addressed names and use
+`latest-offset` when a new or changed statement is first submitted. This demo is
+a live view rather than a historical backfill: the setting prevents a Terraform
+SQL change from replaying retained input into append-only sinks or repeating old
+Bedrock calls. An unchanged stopped statement still resumes from its checkpoint.
+The default Confluent source watermark is retained, with fixed idleness and
+watermark-alignment settings from `vars.tf`; late rows can be inspected in each
+table's `$late` system table.
+
+Model prompt changes intentionally create a new hash-suffixed model name. After
+applying such a change, compare `terraform output active_flink_model_names` with
+the previous output. Put superseded names in `obsolete_model_names` for one
+apply, then remove them from the variable; Terraform submits the required
+`DROP MODEL ...$all` statement because deleting a Terraform statement alone
+does not reverse catalog DDL.
+
 ### 3. Run the demo (Docker)
 
 ```bash
@@ -218,13 +236,22 @@ docker compose up --build
 ```
 
 This starts the **emulator** (generates traffic) and the **backend** (serves the
-dashboard). Open **http://localhost:8080**.
+dashboard). Open **http://localhost:8080**. Compose binds the port to
+`127.0.0.1` so the control and Bedrock-backed Ask-AI endpoints are not exposed
+to the network by default. Ask-AI requests are throttled per client according to
+`ASK_MIN_INTERVAL_SECONDS`.
 
 The dashboard shows the **AI supervisor advice** feed at the top, an animated
 station strip (trains approaching, queueing behind a red signal, dwelling at the
 platform and departing; the Tilley box fills with the crowd and shows live
 occupancy; signals and the street gateline change colour), an occupancy chart
 with anomaly markers, a flow-in/out chart, and a live event feed.
+
+For an audience presentation, click **Present**. The full-screen view enlarges
+the operational story and shows the live path from Kafka ingestion, through
+Flink decisions, to AI advice. The status badge reports data freshness rather
+than socket connectivity alone. Browser libraries are bundled in the image, so
+rendering the dashboard does not depend on a CDN during the presentation.
 
 ![Dashboard](docs/frontend-dashboard.png)
 
@@ -239,7 +266,8 @@ it back to reset.
 Switch to the **Ask AI** tab (top of the page) to ask ad-hoc questions: it keeps
 the full question/answer history with timestamps and a text box at the bottom.
 Each question is enriched with the live station context and answered by Bedrock,
-while the **Dashboard** tab keeps running in the background.
+while the **Dashboard** tab keeps running in the background. Prepared question
+buttons make it possible to run this part of the demonstration without typing.
 
 ![Ask AI tab](docs/frontend-ask-ai.png)
 
@@ -339,7 +367,7 @@ There is no separate config data file, everything is either an **env var** or a
 
 | Where | Holds |
 |---|---|
-| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), the domain constants (`STATION_CAPACITY`, `AGG_WINDOW_SECONDS`, `PCT_LOW/HIGH/CRITICAL`, `STATION_NAME`), the demo knobs (foot/train/surge rates, `INITIAL_OCCUPANCY_FRACTION`), and the managed-MCP `CC_MCP_URL` (written by `terraform apply`; `CC_MCP_AUTH` is a Global API key you add by hand). Plain `KEY=VALUE` lines. |
+| **`.env`** (git-ignored; template in **`.env_example`**) | Everything the Python apps read: secrets (Confluent/AWS keys), domain constants, demo knobs, Ask-AI rate/freshness limits, and the managed-MCP settings. Plain `KEY=VALUE` lines. |
 | **`terraform/vars.tf`** | Terraform's copy: cloud infra (region, cluster, CFUs, retention, Bedrock model) **and** the domain constants used to template the Flink SQL. |
 
 The domain constants exist in both places by design, kept in step automatically:

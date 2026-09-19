@@ -4,14 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Tilley Station: Live Crowd Management</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.25.9/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+  <script src="/vendor/react.production.min.js"></script>
+  <script src="/vendor/react-dom.production.min.js"></script>
+  <script src="/vendor/babel.min.js"></script>
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/vendor/socket.io.min.js"></script>
+  <script src="/vendor/marked.umd.min.js"></script>
+  <script src="/vendor/purify.min.js"></script>
 </head>
 <body>
   <div id="root"></div>
@@ -26,7 +27,7 @@ const DEFAULT_CFG = {
   station_name: "Tilley Station", capacity: 1200,
   agg_window_seconds: 15, pct_low: 0.70, pct_high: 0.85, pct_critical: 0.95,
   neighbour_west: "Overton Station", neighbour_east: "Jones Station",
-  surge_duration: 45,
+  surge_duration: 45, anomaly_context_max_age_seconds: 60,
 };
 const DEMO = new URLSearchParams(location.search).has("demo");
 const clampArr = (a, n) => (a.length > n ? a.slice(a.length - n) : a);
@@ -278,6 +279,35 @@ function baseChartOpts() {
 // ---------------------------------------------------------------------------
 // Feeds
 // ---------------------------------------------------------------------------
+function DemoJourney({ activity, now }) {
+  const stages = [
+    { key: "event", eyebrow: "01 · INGEST", title: "Kafka event stream", detail: "Station telemetry arriving" },
+    { key: "flink", eyebrow: "02 · DECIDE", title: "Flink intelligence", detail: "Metrics, controls & anomalies" },
+    { key: "ai", eyebrow: "03 · ADVISE", title: "AI supervisor", detail: "Context-aware operations advice" },
+  ];
+  return (
+    <section className="journey" aria-label="Live data journey">
+      {stages.map((stage, index) => {
+        const seen = Boolean(activity[stage.key]);
+        const pulse = seen && now - activity[stage.key] < 3500;
+        return (
+          <React.Fragment key={stage.key}>
+            <div className={`journey-stage ${seen ? "seen" : ""} ${pulse ? "pulse" : ""}`}>
+              <span className="journey-light" aria-hidden="true"></span>
+              <span className="journey-copy">
+                <span className="journey-eyebrow">{stage.eyebrow}</span>
+                <strong>{stage.title}</strong>
+                <small>{seen ? stage.detail : "Waiting for activity"}</small>
+              </span>
+            </div>
+            {index < stages.length - 1 && <span className="journey-link" aria-hidden="true">→</span>}
+          </React.Fragment>
+        );
+      })}
+    </section>
+  );
+}
+
 function EventFeed({ items }) {
   return (
     <div className="panel area-feed">
@@ -346,10 +376,11 @@ const agoStr = (ms) => {
   return Math.floor(s / 60) + "m " + (s % 60) + "s ago";
 };
 
-function AnomalyTile({ anom, count }) {
+function AnomalyTile({ anom, count, now, maxAgeSeconds }) {
+  const stale = anom && Number.isFinite(maxAgeSeconds) && now - anom.ts > maxAgeSeconds * 1000;
   return (
-    <div className="panel area-anom anomaly-tile">
-      <h2>Latest anomaly{count ? <span className="anom-count">{count} this session</span> : null}</h2>
+    <div className={`panel area-anom anomaly-tile ${stale ? "stale" : ""}`}>
+      <h2>{stale ? "Previous anomaly" : "Latest anomaly"}{count ? <span className="anom-count">{count} this session</span> : null}</h2>
       {!anom ? (
         <div className="empty">No anomalies detected yet — ML_DETECT_ANOMALIES is watching foot entries and alighting.</div>
       ) : (
@@ -363,7 +394,7 @@ function AnomalyTile({ anom, count }) {
               <div><span className="anom-k">Occupancy</span><span className="anom-v">{Math.round(anom.occupancy_pct * 100)}%</span></div>
             )}
           </div>
-          <div className="anom-time">{hhmmss(anom.ts)} · {agoStr(Date.now() - anom.ts)}</div>
+          <div className="anom-time">{hhmmss(anom.ts)} · {agoStr(now - anom.ts)}{stale ? " · resolved / stale" : ""}</div>
         </div>
       )}
     </div>
@@ -374,6 +405,12 @@ function AnomalyTile({ anom, count }) {
 // Ask-AI tab — full Q&A history + a bottom input.
 // Each question -> Kafka -> Flink (+ live context) -> Bedrock -> answer.
 // ---------------------------------------------------------------------------
+const ASK_PROMPTS = [
+  "Why is occupancy rising?",
+  "What should station staff do now?",
+  "What should we monitor next?",
+];
+
 function AskPanel({ history, submitAsk }) {
   const [text, setText] = useState("");
   const bottomRef = useRef(null);
@@ -405,6 +442,12 @@ function AskPanel({ history, submitAsk }) {
         ))}
         <div ref={bottomRef}></div>
       </div>
+      <div className="ask-prompts" aria-label="Prepared questions">
+        <span>Prepared questions</span>
+        {ASK_PROMPTS.map((prompt) => (
+          <button key={prompt} className="prompt-chip" onClick={() => submitAsk(prompt)}>{prompt}</button>
+        ))}
+      </div>
       <div className="ask-input-bar">
         <textarea rows="2"
           placeholder="Ask the AI supervisor…  (Enter to send, Shift+Enter for a new line)"
@@ -422,6 +465,8 @@ function AskPanel({ history, submitAsk }) {
 function App() {
   const [cfg, setCfg] = useState(DEFAULT_CFG);
   const [connected, setConnected] = useState(false);
+  const [lastEventAt, setLastEventAt] = useState(0);
+  const [activity, setActivity] = useState({ event: 0, flink: 0, ai: 0 });
   const [occ, setOcc] = useState({ occupancy: 0, capacity: DEFAULT_CFG.capacity });
   const [occHist, setOccHist] = useState([]);
   const [flowHist, setFlowHist] = useState([]);
@@ -432,9 +477,13 @@ function App() {
   const [anom, setAnom] = useState(null);
   const [anomCount, setAnomCount] = useState(0);
   const [rush, setRush] = useState(false);
+  const [rushRequest, setRushRequest] = useState("idle");
+  const [notice, setNotice] = useState(null);
   const [now, setNow] = useState(performance.now());
+  const [wallNow, setWallNow] = useState(Date.now());
   const [tab, setTab] = useState("dashboard");
   const [askHistory, setAskHistory] = useState([]);
+  const [presentation, setPresentation] = useState(false);
 
   const trains = useRef(new Map());
   const rushTimer = useRef(null);
@@ -447,6 +496,14 @@ function App() {
 
   const handle = useCallback((channel, p) => {
     const c = cfgRef.current;
+    const receivedAt = Date.now();
+    setLastEventAt(receivedAt);
+    setActivity((current) => ({
+      ...current,
+      event: channel === "raw_event" || channel === "occupancy" ? receivedAt : current.event,
+      flink: ["metrics", "anomaly", "signal", "gateline"].includes(channel) ? receivedAt : current.flink,
+      ai: ["ai_suggestion", "operator_answer"].includes(channel) ? receivedAt : current.ai,
+    }));
     if (channel === "occupancy") {
       setOcc({ occupancy: p.occupancy, capacity: p.capacity });
       setOccHist((h) => clampArr([...h, { ts: Date.now(), occ: p.occupancy, anomaly: false }], 120));
@@ -541,14 +598,63 @@ function App() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const toggleRush = useCallback(() => {
+  // A low-frequency wall clock drives freshness labels without tying them to
+  // the 60fps train animation clock.
+  useEffect(() => {
+    const timer = setInterval(() => setWallNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), notice.kind === "error" ? 8000 : 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      if (!document.fullscreenElement) setPresentation(false);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
+
+  const toggleRush = useCallback(async () => {
+    if (rushRequest !== "idle") return;
     const next = !rush;
-    setRush(next);
+    setRushRequest(next ? "starting" : "resetting");
+    setNotice(null);
     if (rushTimer.current) { clearTimeout(rushTimer.current); rushTimer.current = null; }
-    if (DEMO) { window.__demoSurge && window.__demoSurge(next); }
-    else fetch(next ? "/demo/surge" : "/demo/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
-    if (next) rushTimer.current = setTimeout(() => setRush(false), (cfgRef.current.surge_duration || 45) * 1000);
-  }, [rush]);
+    try {
+      if (DEMO) {
+        window.__demoSurge && window.__demoSurge(next);
+      } else {
+        const response = await fetch(next ? "/demo/surge" : "/demo/reset", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+      }
+      setRush(next);
+      setNotice({ kind: "ok", text: next ? "Rush-hour scenario started" : "Station scenario reset" });
+      if (next) rushTimer.current = setTimeout(() => setRush(false), cfgRef.current.surge_duration * 1000);
+    } catch (error) {
+      setNotice({ kind: "error", text: `Control command failed: ${error.message}` });
+    } finally {
+      setRushRequest("idle");
+    }
+  }, [rush, rushRequest]);
+
+  const togglePresentation = useCallback(async () => {
+    if (presentation) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+      setPresentation(false);
+      return;
+    }
+    setTab("dashboard");
+    setPresentation(true);
+    await document.documentElement.requestFullscreen?.().catch(() => {});
+  }, [presentation]);
 
   const submitAsk = useCallback((question) => {
     const q = (question || "").trim();
@@ -576,13 +682,31 @@ function App() {
   }, [handle]);
 
   const trainList = Array.from(trains.current.values());
+  const dataAgeSeconds = lastEventAt ? Math.max(0, Math.round((wallNow - lastEventAt) / 1000)) : null;
+  const streamHealthy = connected && dataAgeSeconds !== null && dataAgeSeconds < 12;
+  const connectionLabel = !connected
+    ? "reconnecting…"
+    : dataAgeSeconds === null
+      ? "connected · awaiting data"
+      : streamHealthy
+        ? `live · updated ${dataAgeSeconds}s ago`
+        : `connected · no data for ${dataAgeSeconds}s`;
+  const rushLabel = rushRequest === "starting"
+    ? "Starting scenario…"
+    : rushRequest === "resetting"
+      ? "Resetting…"
+      : `Rush Hour: ${rush ? "ACTIVE" : "START"}`;
 
   return (
-    <React.Fragment>
+    <div className={`app-shell ${presentation ? "presenter" : ""}`}>
       <header>
-        <span style={{ fontSize: 20 }}>🚇</span>
+        <span className="brand-mark" aria-hidden="true">▰</span>
         <h1>Tilley Station <span className="sub">: LIVE CROWD MANAGEMENT</span></h1>
-        <span className={`status ${connected ? "ok" : "bad"}`}>{connected ? (DEMO ? "demo" : "live") : "connecting…"}</span>
+        <span className={`status ${streamHealthy ? "ok" : connected ? "warn" : "bad"}`}>
+          <span className="status-dot"></span>{DEMO
+            ? (dataAgeSeconds === null ? "demo · starting" : `demo · updated ${dataAgeSeconds}s ago`)
+            : connectionLabel}
+        </span>
         <nav className="tabs">
           <button className={tab === "dashboard" ? "tab active" : "tab"} onClick={() => setTab("dashboard")}>Dashboard</button>
           <button className={tab === "ask" ? "tab active" : "tab"} onClick={() => setTab("ask")}>
@@ -591,20 +715,30 @@ function App() {
         </nav>
         <div className="spacer"></div>
         <div className="controls">
-          <button className={rush ? "" : "secondary"}
-            style={{ background: rush ? "var(--red)" : "var(--green)", borderColor: "transparent", minWidth: 168 }}
-            onClick={toggleRush}>
-            Rush Hour: {rush ? "YES" : "NO"}
+          <button className="present-button secondary" onClick={togglePresentation}>
+            {presentation ? "Exit presentation" : "Present"}
+          </button>
+          <button className={`rush-button ${rush ? "active" : ""}`}
+            onClick={toggleRush} disabled={rushRequest !== "idle" || (!connected && !DEMO)}>
+            {rushLabel}
           </button>
         </div>
       </header>
 
+      {notice && (
+        <div className={`notice ${notice.kind}`} role="status">
+          <span>{notice.text}</span><button aria-label="Dismiss" onClick={() => setNotice(null)}>×</button>
+        </div>
+      )}
+
       {tab === "dashboard" ? (
         <main>
+          <DemoJourney activity={activity} now={wallNow} />
           <AIFeed items={ai} />
           <StationStrip trains={trainList} signals={signals} gateline={gateline}
             occupancy={occ.occupancy} capacity={occ.capacity} cfg={cfg} now={now} />
-          <AnomalyTile anom={anom} count={anomCount} />
+          <AnomalyTile anom={anom} count={anomCount} now={wallNow}
+            maxAgeSeconds={cfg.anomaly_context_max_age_seconds} />
           <div className="panel area-chartA">
             <h2>Occupancy over time</h2>
             <OccupancyChart hist={occHist} capacity={occ.capacity} />
@@ -618,7 +752,7 @@ function App() {
       ) : (
         <AskPanel history={askHistory} submitAsk={submitAsk} />
       )}
-    </React.Fragment>
+    </div>
   );
 }
 

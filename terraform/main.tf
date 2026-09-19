@@ -23,9 +23,32 @@ locals {
     "operator_answers",
   ]
 
-  # Raw display topics we window / control over — set a zero-lag watermark so
-  # windows fire promptly and the control loops react within a few seconds.
-  raw_display_topics = [
+  client_write_topics = [
+    "train_in_transit",
+    "train_in_station",
+    "passengers_flow",
+    "station_occupancy",
+    "signal_state",
+    "gateline_state",
+    "demo_control",
+    "operator_questions",
+  ]
+
+  client_read_topics = [
+    "train_in_transit",
+    "train_in_station",
+    "passengers_flow",
+    "station_occupancy",
+    "station_metrics",
+    "station_anomalies",
+    "signal_state",
+    "gateline_state",
+    "station_ai_suggestions",
+    "operator_answers",
+    "demo_control",
+  ]
+
+  event_time_source_topics = [
     "passengers_flow",
     "train_in_station",
     "train_in_transit",
@@ -53,15 +76,20 @@ locals {
   # ML_PREDICT (same local) always references it. Unchanged definition => same
   # name => no churn.
   # See: docs.confluent.io/cloud/current/flink/reference/statements/create-model.html#model-versioning
-  model_version_hash = substr(sha1(join("|", [
+  advisor_model_hash = substr(sha1(join("|", [
     filesha1("${path.module}/sql/05_ai_model.sql"),
+    local.bedrock_endpoint,
+    tostring(var.ai_max_tokens),
+    tostring(var.ai_temperature),
+  ])), 0, 8)
+  qa_model_hash = substr(sha1(join("|", [
     filesha1("${path.module}/sql/05b_qa_model.sql"),
     local.bedrock_endpoint,
     tostring(var.ai_max_tokens),
     tostring(var.ai_temperature),
   ])), 0, 8)
-  model_name    = "${var.ai_model_name}_${local.model_version_hash}"
-  qa_model_name = "${var.ai_qa_model_name}_${local.model_version_hash}"
+  model_name    = "${var.ai_model_name}_${local.advisor_model_hash}"
+  qa_model_name = "${var.ai_qa_model_name}_${local.qa_model_hash}"
 
   # Constants injected into the Flink SQL templates. Domain values are Terraform
   # variables (vars.tf) — Terraform's own copy. On apply, write_env.sh writes the
@@ -80,6 +108,10 @@ locals {
     qa_model_name      = local.qa_model_name
     ai_max_tokens      = var.ai_max_tokens
     ai_temperature     = var.ai_temperature
+    ai_client_timeout  = var.ai_client_timeout
+    ai_max_parallelism = var.ai_max_parallelism
+    ai_retry_count     = var.ai_retry_count
+    anomaly_cooldown   = var.ai_anomaly_cooldown_seconds
   }
 
   flink_statement_properties = {
@@ -96,6 +128,11 @@ locals {
     local.flink_statement_properties,
     var.state_ttl == "" ? {} : { "sql.state-ttl" = var.state_ttl },
     var.scan_idle_timeout == "" ? {} : { "sql.tables.scan.idle-timeout" = var.scan_idle_timeout },
+    var.watermark_max_drift == "" ? {} : { "sql.tables.scan.watermark-alignment.max-allowed-drift" = var.watermark_max_drift },
+    # This is a live demo, not a historical backfill. New/replaced statements
+    # start at the current tail so a SQL edit cannot replay retained data into
+    # append-only sinks or repeat historical Bedrock calls.
+    { "sql.tables.scan.startup.mode" = "latest-offset" },
   )
 }
 
@@ -162,16 +199,32 @@ resource "confluent_role_binding" "app_manager_env_admin" {
   crn_pattern = confluent_environment.env.resource_name
 }
 
-resource "confluent_role_binding" "sr_env_admin" {
+resource "confluent_role_binding" "sr_subject_owner" {
   principal   = "User:${confluent_service_account.sr.id}"
-  role_name   = "EnvironmentAdmin"
-  crn_pattern = confluent_environment.env.resource_name
+  role_name   = "ResourceOwner"
+  crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=*"
 }
 
-resource "confluent_role_binding" "clients_cluster_admin" {
+resource "confluent_role_binding" "clients_read_topics" {
+  for_each = toset(local.client_read_topics)
+
   principal   = "User:${confluent_service_account.clients.id}"
-  role_name   = "CloudClusterAdmin"
-  crn_pattern = confluent_kafka_cluster.kafka.rbac_crn
+  role_name   = "DeveloperRead"
+  crn_pattern = "${confluent_kafka_cluster.kafka.rbac_crn}/kafka=${confluent_kafka_cluster.kafka.id}/topic=${each.key}"
+}
+
+resource "confluent_role_binding" "clients_write_topics" {
+  for_each = toset(local.client_write_topics)
+
+  principal   = "User:${confluent_service_account.clients.id}"
+  role_name   = "DeveloperWrite"
+  crn_pattern = "${confluent_kafka_cluster.kafka.rbac_crn}/kafka=${confluent_kafka_cluster.kafka.id}/topic=${each.key}"
+}
+
+resource "confluent_role_binding" "clients_consumer_groups" {
+  principal   = "User:${confluent_service_account.clients.id}"
+  role_name   = "ResourceOwner"
+  crn_pattern = "${confluent_kafka_cluster.kafka.rbac_crn}/kafka=${confluent_kafka_cluster.kafka.id}/group=${var.client_consumer_group_prefix}*"
 }
 
 # ---------------------------------------------------------------------------
@@ -213,7 +266,7 @@ resource "confluent_api_key" "sr" {
     }
   }
   depends_on = [
-    confluent_role_binding.sr_env_admin,
+    confluent_role_binding.sr_subject_owner,
     data.confluent_schema_registry_cluster.sr,
   ]
 }
@@ -234,7 +287,11 @@ resource "confluent_api_key" "clients_kafka" {
       id = confluent_environment.env.id
     }
   }
-  depends_on = [confluent_role_binding.clients_cluster_admin]
+  depends_on = [
+    confluent_role_binding.clients_read_topics,
+    confluent_role_binding.clients_write_topics,
+    confluent_role_binding.clients_consumer_groups,
+  ]
 }
 
 resource "confluent_api_key" "flink" {
@@ -298,7 +355,7 @@ resource "terraform_data" "write_env" {
 }
 
 # ---------------------------------------------------------------------------
-# Topics + Avro schemas (for_each over all 10) —
+# Topics + Avro schemas
 # ---------------------------------------------------------------------------
 resource "confluent_kafka_topic" "topic" {
   for_each = toset(local.topics)
@@ -446,11 +503,11 @@ data "confluent_flink_region" "main" {
 # Reusable statement scaffolding is repeated per resource below (Terraform has
 # no statement "module" here) — each sets org/env/pool/principal/creds/props.
 
-# ---------------------------------------------------------------------------
-# 0) Zero-lag watermarks on the raw display tables (low-latency windows/control)
-# ---------------------------------------------------------------------------
-resource "confluent_flink_statement" "watermark" {
-  for_each = toset(local.raw_display_topics)
+# Restore Confluent's source watermark strategy explicitly. This both gives new
+# deployments the documented 180ms out-of-order tolerance and reverses the old
+# zero-lag catalog DDL on environments created by earlier project versions.
+resource "confluent_flink_statement" "source_watermark" {
+  for_each = toset(local.event_time_source_topics)
 
   organization {
     id = data.confluent_organization.org.id
@@ -464,9 +521,10 @@ resource "confluent_flink_statement" "watermark" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = "ALTER TABLE `${each.value}` MODIFY WATERMARK FOR $rowtime AS $rowtime;"
-  properties    = local.flink_statement_properties
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-watermark-${replace(each.key, "_", "-")}"
+  statement      = "ALTER TABLE `${each.key}` MODIFY WATERMARK FOR $rowtime AS SOURCE_WATERMARK();"
+  properties     = local.flink_statement_properties
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
@@ -474,41 +532,11 @@ resource "confluent_flink_statement" "watermark" {
   depends_on = [confluent_schema.value, confluent_flink_compute_pool.pool]
 }
 
-# ---------------------------------------------------------------------------
-# station_metrics is written transactionally by the metrics statement. Without
-# this, the DOWNSTREAM Flink statements (anomalies, AI advisor) would wait up to
-# ~1 min per Flink checkpoint commit before seeing each new window (read-committed
-# is the default). read-uncommitted surfaces rows immediately — at-least-once, so
-# an occasional duplicate row is possible, which is fine for a live dashboard.
-# See: docs.confluent.io/cloud/current/flink/concepts/delivery-guarantees.html
-# ---------------------------------------------------------------------------
-resource "confluent_flink_statement" "metrics_read_uncommitted" {
-  organization {
-    id = data.confluent_organization.org.id
-  }
-  environment {
-    id = confluent_environment.env.id
-  }
-  compute_pool {
-    id = confluent_flink_compute_pool.pool.id
-  }
-  principal {
-    id = confluent_service_account.app_manager.id
-  }
-  statement     = "ALTER TABLE `station_metrics` SET ('kafka.consumer.isolation-level' = 'read-uncommitted');"
-  properties    = local.flink_statement_properties
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
-  credentials {
-    key    = confluent_api_key.flink.id
-    secret = confluent_api_key.flink.secret
-  }
-  depends_on = [confluent_schema.value, confluent_flink_compute_pool.pool]
-}
+# RESET is also explicit because removing the former Terraform ALTER statement
+# would stop tracking that statement but would not reverse persistent catalog DDL.
+resource "confluent_flink_statement" "committed_intermediate_reads" {
+  for_each = toset(["station_metrics", "station_anomalies"])
 
-# station_anomalies is written transactionally by the anomalies statement and now
-# read by the AI advisor (06). Same reasoning as above: read-uncommitted so an
-# anomaly reaches the advisor in seconds, not after a ~1 min checkpoint commit.
-resource "confluent_flink_statement" "anomalies_read_uncommitted" {
   organization {
     id = data.confluent_organization.org.id
   }
@@ -521,9 +549,10 @@ resource "confluent_flink_statement" "anomalies_read_uncommitted" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = "ALTER TABLE `station_anomalies` SET ('kafka.consumer.isolation-level' = 'read-uncommitted');"
-  properties    = local.flink_statement_properties
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-read-committed-${replace(each.key, "_", "-")}"
+  statement      = "ALTER TABLE `${each.key}` RESET ('kafka.consumer.isolation-level');"
+  properties     = local.flink_statement_properties
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
@@ -547,14 +576,15 @@ resource "confluent_flink_statement" "metrics" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = templatefile("${path.module}/sql/01_metrics.sql", local.sql_vars)
-  properties    = local.flink_statement_properties_dml
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-metrics-${substr(filesha1("${path.module}/sql/01_metrics.sql"), 0, 8)}"
+  statement      = templatefile("${path.module}/sql/01_metrics.sql", local.sql_vars)
+  properties     = local.flink_statement_properties_dml
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
   }
-  depends_on = [confluent_flink_statement.watermark]
+  depends_on = [confluent_flink_statement.source_watermark]
 }
 
 # ---------------------------------------------------------------------------
@@ -573,14 +603,18 @@ resource "confluent_flink_statement" "anomalies" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = templatefile("${path.module}/sql/02_anomalies.sql", local.sql_vars)
-  properties    = local.flink_statement_properties_dml
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-anomalies-${substr(filesha1("${path.module}/sql/02_anomalies.sql"), 0, 8)}"
+  statement      = templatefile("${path.module}/sql/02_anomalies.sql", local.sql_vars)
+  properties     = local.flink_statement_properties_dml
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
   }
-  depends_on = [confluent_flink_statement.metrics, confluent_flink_statement.metrics_read_uncommitted]
+  depends_on = [
+    confluent_flink_statement.metrics,
+    confluent_flink_statement.committed_intermediate_reads["station_metrics"],
+  ]
 }
 
 # NOTE: signals + gateline are now DETERMINISTIC and owned by the Python emulator
@@ -655,9 +689,10 @@ resource "confluent_flink_statement" "ai_model" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = templatefile("${path.module}/sql/05_ai_model.sql", local.sql_vars)
-  properties    = local.flink_statement_properties
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-advisor-model-${local.advisor_model_hash}"
+  statement      = templatefile("${path.module}/sql/05_ai_model.sql", local.sql_vars)
+  properties     = local.flink_statement_properties
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
@@ -681,9 +716,10 @@ resource "confluent_flink_statement" "ai_suggestions" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = templatefile("${path.module}/sql/06_ai_suggestions.sql", local.sql_vars)
-  properties    = local.flink_statement_properties_dml
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-ai-suggestions-${substr(filesha1("${path.module}/sql/06_ai_suggestions.sql"), 0, 8)}"
+  statement      = templatefile("${path.module}/sql/06_ai_suggestions.sql", local.sql_vars)
+  properties     = local.flink_statement_properties_dml
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
@@ -691,8 +727,7 @@ resource "confluent_flink_statement" "ai_suggestions" {
   depends_on = [
     confluent_flink_statement.ai_model,
     confluent_flink_statement.anomalies,
-    confluent_flink_statement.metrics_read_uncommitted,
-    confluent_flink_statement.anomalies_read_uncommitted,
+    confluent_flink_statement.committed_intermediate_reads["station_anomalies"],
   ]
 }
 
@@ -712,9 +747,10 @@ resource "confluent_flink_statement" "ai_qa_model" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = templatefile("${path.module}/sql/05b_qa_model.sql", local.sql_vars)
-  properties    = local.flink_statement_properties
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-qa-model-${local.qa_model_hash}"
+  statement      = templatefile("${path.module}/sql/05b_qa_model.sql", local.sql_vars)
+  properties     = local.flink_statement_properties
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
@@ -739,9 +775,10 @@ resource "confluent_flink_statement" "operator_qa" {
   principal {
     id = confluent_service_account.app_manager.id
   }
-  statement     = templatefile("${path.module}/sql/07_operator_qa.sql", local.sql_vars)
-  properties    = local.flink_statement_properties_dml
-  rest_endpoint = data.confluent_flink_region.main.rest_endpoint
+  statement_name = "tilley-operator-qa-${substr(filesha1("${path.module}/sql/07_operator_qa.sql"), 0, 8)}"
+  statement      = templatefile("${path.module}/sql/07_operator_qa.sql", local.sql_vars)
+  properties     = local.flink_statement_properties_dml
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
   credentials {
     key    = confluent_api_key.flink.id
     secret = confluent_api_key.flink.secret
@@ -751,4 +788,44 @@ resource "confluent_flink_statement" "operator_qa" {
     confluent_schema.value,
     confluent_flink_compute_pool.pool,
   ]
+}
+
+# CREATE MODEL is persistent catalog DDL: deleting its Terraform statement does
+# not drop the model. When a prompt hash changes, pass the superseded model name
+# in var.obsolete_model_names for one apply; this submits an explicit DROP and
+# prevents hashed model objects from accumulating indefinitely.
+resource "confluent_flink_statement" "obsolete_model_cleanup" {
+  for_each = toset(var.obsolete_model_names)
+
+  organization {
+    id = data.confluent_organization.org.id
+  }
+  environment {
+    id = confluent_environment.env.id
+  }
+  compute_pool {
+    id = confluent_flink_compute_pool.pool.id
+  }
+  principal {
+    id = confluent_service_account.app_manager.id
+  }
+  statement_name = "tilley-drop-model-${substr(sha1(each.key), 0, 12)}"
+  statement      = "DROP MODEL IF EXISTS `${each.key}$all`;"
+  properties     = local.flink_statement_properties
+  rest_endpoint  = data.confluent_flink_region.main.rest_endpoint
+  credentials {
+    key    = confluent_api_key.flink.id
+    secret = confluent_api_key.flink.secret
+  }
+  depends_on = [
+    confluent_flink_statement.ai_model,
+    confluent_flink_statement.ai_qa_model,
+  ]
+
+  lifecycle {
+    precondition {
+      condition     = !contains([local.model_name, local.qa_model_name], each.key)
+      error_message = "obsolete_model_names must not contain either currently active model name."
+    }
+  }
 }
